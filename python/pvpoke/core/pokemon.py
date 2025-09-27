@@ -69,6 +69,16 @@ class Pokemon:
     # Shadow status
     shadow_type: str = "normal"  # "normal", "shadow", or "purified"
     
+    # AI behavior properties
+    farm_energy: bool = False
+    bait_shields: bool = False
+    priority: int = 0
+    index: int = 0  # Player index (0 or 1)
+    
+    # Battle state tracking
+    cooldown: int = 0  # Cooldown in milliseconds
+    turns_to_ko: int = -1  # Turns needed to KO opponent
+    
     # CP multipliers for each level (1-50)
     CPM_VALUES = [
         0.0939999967813491, 0.135137430784308, 0.166397869586944, 0.192650914456886,
@@ -126,6 +136,20 @@ class Pokemon:
         stats = self.calculate_stats()
         cp = math.floor(0.1 * stats.atk * math.sqrt(stats.defense) * math.sqrt(stats.hp))
         return max(10, cp)  # Minimum CP is 10
+    
+    def reset(self):
+        """Reset Pokemon to initial battle state."""
+        stats = self.calculate_stats()
+        self.current_hp = stats.hp
+        self.energy = 0
+        self.stat_buffs = [0, 0]
+        self.cooldown = 0
+        self.turns_to_ko = -1
+    
+    @property
+    def stats(self) -> Stats:
+        """Get current effective stats (for compatibility with AI logic)."""
+        return self.calculate_stats()
     
     def optimize_for_league(self, cp_limit: int):
         """Find the best IV combination for a given CP limit."""

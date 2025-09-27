@@ -60,6 +60,11 @@ class FastMove(Move):
         """Energy per second."""
         return self.energy_gain / (self.cooldown / 1000) if self.cooldown > 0 else 0
     
+    @property
+    def damage(self) -> int:
+        """Compatibility property for AI logic (will be set by damage calculator)."""
+        return getattr(self, '_damage', self.power)
+    
     def __repr__(self):
         return f"FastMove(id={self.move_id}, name={self.name}, power={self.power}, energy={self.energy_gain}, turns={self.turns})"
 
@@ -96,6 +101,32 @@ class ChargedMove(Move):
     def dpe(self) -> float:
         """Damage per energy."""
         return self.power / self.energy_cost if self.energy_cost > 0 else 0
+    
+    # Compatibility properties for AI logic
+    @property
+    def self_debuffing(self) -> bool:
+        """Compatibility property for AI logic."""
+        return self.is_self_debuffing
+    
+    @property
+    def self_buffing(self) -> bool:
+        """Compatibility property for AI logic."""
+        return self.is_buffing
+    
+    @property
+    def self_attack_debuffing(self) -> bool:
+        """Check if move debuffs user's attack."""
+        return self.buff_target == "self" and self.buffs[0] < 1
+    
+    @property
+    def energy(self) -> int:
+        """Compatibility property for AI logic."""
+        return self.energy_cost
+    
+    @property
+    def damage(self) -> int:
+        """Compatibility property for AI logic (will be set by damage calculator)."""
+        return getattr(self, '_damage', self.power)
     
     def __repr__(self):
         return f"ChargedMove(id={self.move_id}, name={self.name}, power={self.power}, energy={self.energy_cost})"

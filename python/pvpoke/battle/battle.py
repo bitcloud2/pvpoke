@@ -6,6 +6,7 @@ from enum import Enum
 from ..core.pokemon import Pokemon
 from ..core.moves import Move, FastMove, ChargedMove
 from .damage_calculator import DamageCalculator
+from .ai import ActionLogic, BattleAI
 
 
 class BattlePhase(Enum):
@@ -128,21 +129,31 @@ class Battle:
     
     def decide_action(self, pokemon_index: int) -> Dict:
         """
-        Decide what action a Pokemon should take.
-        For now, uses simple logic. Will be enhanced with AI.
+        Decide what action a Pokemon should take using the full AI logic.
         """
         pokemon = self.pokemon[pokemon_index]
+        opponent = self.pokemon[1 - pokemon_index]
         opponent_index = 1 - pokemon_index
         
-        # Check if can use charged move
-        if pokemon.charged_move_1 and pokemon.energy >= pokemon.charged_move_1.energy_cost:
+        # Use the full ActionLogic for decision making
+        action = ActionLogic.decide_action(self, pokemon, opponent)
+        
+        if action:
+            # Convert TimelineAction to battle action format
+            move = None
+            if action.action_type == "charged":
+                if action.value == 0:
+                    move = pokemon.charged_move_1
+                elif action.value == 1:
+                    move = pokemon.charged_move_2
+            
             return {
-                "type": "charged",
-                "move": pokemon.charged_move_1,
+                "type": action.action_type,
+                "move": move,
                 "target": opponent_index
             }
         
-        # Use fast move
+        # Use fast move (default when ActionLogic returns None)
         return {
             "type": "fast",
             "move": pokemon.fast_move,
