@@ -266,10 +266,268 @@ class ActionLogic:
                             {"shielded": False, "buffs": False, "priority": getattr(poke, 'priority', 0)}
                         )
         
-        # Continue with the rest of the complex AI logic...
-        # This is a substantial implementation - let me continue with the key parts
+        # DYNAMIC PROGRAMMING ALGORITHM FOR OPTIMAL MOVE SEQUENCING
+        # ELEMENTS OF DP QUEUE: ENERGY, OPPONENT HEALTH, TURNS, OPPONENT SHIELDS, USED MOVES, ATTACK BUFF, CHANCE
         
-        # For now, return None to use fast move (simplified)
+        state_count = 0
+        dp_queue = [BattleState(
+            energy=poke.energy,
+            opp_health=opponent.current_hp,
+            turn=0,
+            opp_shields=opponent.shields,
+            moves=[],
+            buffs=0,
+            chance=1.0
+        )]
+        state_list = []
+        final_state = None
+        
+        # Main DP queue processing loop
+        while len(dp_queue) != 0:
+            # A not very good way to prevent infinite loops
+            if state_count >= 500:
+                ActionLogic._log_decision(battle, poke, " considered too many states, likely an infinite loop")
+                return None
+            state_count += 1
+            
+            curr_state = dp_queue.pop(0)  # shift() equivalent
+            dp_charged_move_ready = []
+            
+            # Set cap of 4 for buffs
+            curr_state.buffs = min(4, curr_state.buffs)
+            curr_state.buffs = max(-4, curr_state.buffs)
+            
+            # Found fastest way to defeat enemy, fastest = optimal in this case since damage taken is strictly dependent on time
+            # Set final_state to curr_state and do more evaluation later
+            if curr_state.opp_health <= 0:
+                state_list.append(curr_state)
+                final_state = curr_state
+                
+                if curr_state.chance == 1.0:
+                    break
+                else:
+                    continue
+            
+            # Evaluate cooldown to reach each charge move
+            for n in range(len(active_charged_moves)):
+                if curr_state.energy >= active_charged_moves[n].energy_cost:
+                    dp_charged_move_ready.append(0)
+                else:
+                    turns_needed = math.ceil((active_charged_moves[n].energy_cost - curr_state.energy) / poke.fast_move.energy_gain)
+                    dp_charged_move_ready.append(turns_needed * poke.fast_move.turns)
+            
+            # Push states onto queue in order of TURN
+            # Evaluate each charged move and create new states
+            for n in range(len(active_charged_moves)):
+                move = active_charged_moves[n]
+                
+                # Apply stat changes to pokemon attack (temporary buffs for calculation)
+                current_stat_buffs = [poke.stat_buffs[0], poke.stat_buffs[1]] if hasattr(poke, 'stat_buffs') else [0, 0]
+                
+                # Calculate attack multiplier from buffs
+                attack_mult = curr_state.buffs
+                possible_attack_mult = attack_mult
+                change_ttk_chance = 0.0
+                
+                # Apply move buffs if the move has them
+                if hasattr(move, 'buffs') and move.buffs:
+                    buff_apply_chance = getattr(move, 'buff_apply_chance', 1.0)
+                    buff_target = getattr(move, 'buff_target', 'self')
+                    
+                    if buff_target == 'self' and len(move.buffs) >= 2:
+                        # Attack buff is typically the first element
+                        attack_buff = move.buffs[0] if move.buffs[0] != 1.0 else 0
+                        if attack_buff != 0:
+                            if buff_apply_chance < 1.0:
+                                change_ttk_chance = buff_apply_chance
+                                possible_attack_mult = min(4, max(-4, attack_mult + attack_buff))
+                            else:
+                                attack_mult = min(4, max(-4, attack_mult + attack_buff))
+                
+                # Calculate move damage with current buffs
+                move_damage = DamageCalculator.calculate_damage(poke, opponent, move)
+                
+                # If move is ready (0 turns to wait)
+                if dp_charged_move_ready[n] == 0:
+                    new_energy = curr_state.energy - move.energy_cost
+                    new_opp_health = curr_state.opp_health - move_damage
+                    new_turn = curr_state.turn + 1
+                    new_shields = curr_state.opp_shields
+                    
+                    # Handle shielding
+                    if new_shields > 0:
+                        new_shields -= 1
+                        # If shielded, only 1 damage gets through
+                        new_opp_health = curr_state.opp_health - 1
+                    
+                    # Check if we should insert this state
+                    insert_element = True
+                    
+                    # Simple insertion for now - add to front of queue
+                    if len(dp_queue) == 0:
+                        new_moves = curr_state.moves + [move]
+                        dp_queue.insert(0, BattleState(
+                            energy=new_energy,
+                            opp_health=new_opp_health,
+                            turn=new_turn,
+                            opp_shields=new_shields,
+                            moves=new_moves,
+                            buffs=attack_mult,
+                            chance=curr_state.chance
+                        ))
+                        
+                        # If move has chance of changing buffs, add that result too
+                        if change_ttk_chance > 0:
+                            dp_queue.insert(0, BattleState(
+                                energy=new_energy,
+                                opp_health=new_opp_health,
+                                turn=new_turn,
+                                opp_shields=new_shields,
+                                moves=new_moves,
+                                buffs=possible_attack_mult,
+                                chance=curr_state.chance * change_ttk_chance
+                            ))
+                    else:
+                        # Find correct insertion point based on turn priority
+                        i = 0
+                        insert = True
+                        
+                        while i < len(dp_queue) and dp_queue[i].turn <= new_turn:
+                            # Check if this state is dominated by an existing state
+                            if (dp_queue[i].opp_health <= new_opp_health and 
+                                dp_queue[i].energy >= new_energy and 
+                                dp_queue[i].buffs >= attack_mult and 
+                                dp_queue[i].opp_shields <= new_shields):
+                                insert = False
+                                break
+                            i += 1
+                        
+                        if insert:
+                            new_moves = curr_state.moves + [move]
+                            dp_queue.insert(i, BattleState(
+                                energy=new_energy,
+                                opp_health=new_opp_health,
+                                turn=new_turn,
+                                opp_shields=new_shields,
+                                moves=new_moves,
+                                buffs=attack_mult,
+                                chance=curr_state.chance
+                            ))
+                            
+                            # If move has chance of changing buffs, add that result too
+                            if change_ttk_chance > 0:
+                                dp_queue.insert(i, BattleState(
+                                    energy=new_energy,
+                                    opp_health=new_opp_health,
+                                    turn=new_turn,
+                                    opp_shields=new_shields,
+                                    moves=new_moves,
+                                    buffs=possible_attack_mult,
+                                    chance=curr_state.chance * change_ttk_chance
+                                ))
+                
+                # If move requires farming (not ready this turn)
+                else:
+                    # Calculate energy and health after farming
+                    turns_to_farm = dp_charged_move_ready[n] // poke.fast_move.turns
+                    fast_simulated_damage = DamageCalculator.calculate_damage(poke, opponent, poke.fast_move) * turns_to_farm
+                    
+                    new_energy = curr_state.energy - move.energy_cost + (poke.fast_move.energy_gain * turns_to_farm)
+                    new_opp_health = curr_state.opp_health - move_damage - fast_simulated_damage
+                    new_turn = curr_state.turn + dp_charged_move_ready[n] + 1
+                    new_shields = curr_state.opp_shields
+                    
+                    # Handle shielding
+                    if new_shields > 0:
+                        new_shields -= 1
+                        # If shielded, only fast move damage + 1 gets through
+                        new_opp_health = curr_state.opp_health - fast_simulated_damage - 1
+                    
+                    # Insert state into queue
+                    i = 0
+                    insert_element = True
+                    
+                    if len(dp_queue) == 0:
+                        new_moves = curr_state.moves + [move]
+                        dp_queue.insert(0, BattleState(
+                            energy=new_energy,
+                            opp_health=new_opp_health,
+                            turn=new_turn,
+                            opp_shields=new_shields,
+                            moves=new_moves,
+                            buffs=attack_mult,
+                            chance=curr_state.chance
+                        ))
+                    else:
+                        # Find correct insertion point
+                        while i < len(dp_queue) and dp_queue[i].turn < new_turn:
+                            if (dp_queue[i].opp_health <= new_opp_health and 
+                                dp_queue[i].energy >= new_energy and 
+                                dp_queue[i].buffs >= attack_mult and 
+                                dp_queue[i].opp_shields <= new_shields):
+                                insert_element = False
+                                break
+                            i += 1
+                        
+                        if insert_element:
+                            new_moves = curr_state.moves + [move]
+                            dp_queue.insert(i, BattleState(
+                                energy=new_energy,
+                                opp_health=new_opp_health,
+                                turn=new_turn,
+                                opp_shields=new_shields,
+                                moves=new_moves,
+                                buffs=attack_mult,
+                                chance=curr_state.chance
+                            ))
+        
+        # Process final states and choose best move sequence
+        if final_state is not None and final_state.moves:
+            # Return the first move in the optimal sequence
+            first_move = final_state.moves[0]
+            move_index = 0
+            
+            # Find the index of this move in active charged moves
+            for i, move in enumerate(active_charged_moves):
+                if move == first_move:
+                    move_index = i
+                    break
+            
+            ActionLogic._log_decision(battle, poke, f" uses {first_move.move_id} from optimal DP sequence")
+            
+            return TimelineAction(
+                "charged",
+                poke.index,
+                turns,
+                move_index,
+                {"shielded": False, "buffs": False, "priority": getattr(poke, 'priority', 0)}
+            )
+        elif state_list:
+            # Find the state with the highest chance of success
+            best_state = max(state_list, key=lambda s: s.chance)
+            
+            if best_state.moves:
+                # Return the first move in the optimal sequence
+                first_move = best_state.moves[0]
+                move_index = 0
+                
+                # Find the index of this move in active charged moves
+                for i, move in enumerate(active_charged_moves):
+                    if move == first_move:
+                        move_index = i
+                        break
+                
+                ActionLogic._log_decision(battle, poke, f" uses {first_move.move_id} from optimal DP sequence")
+                
+                return TimelineAction(
+                    "charged",
+                    poke.index,
+                    turns,
+                    move_index,
+                    {"shielded": False, "buffs": False, "priority": getattr(poke, 'priority', 0)}
+                )
+        
+        # No optimal charged move sequence found, use fast move
         return None
     
     @staticmethod
