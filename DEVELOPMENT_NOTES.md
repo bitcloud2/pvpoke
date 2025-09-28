@@ -2,9 +2,17 @@
 
 This document contains important considerations, known differences, and future improvements for the PvPoke Python implementation.
 
+## Steps for Full Conversion
+
+1. Port Full AI Logic - Complete the battle AI from ActionLogic.js
+2. Implement Full Ranking System - Port the complete ranking algorithm
+3. Add Advanced Mechanics - Switching, timeout mechanics, etc.
+4. Validate Against JS - Ensure Python results match JavaScript version
+5. Performance Optimization - Add parallel simulations for rankings
+
 ## IV Optimization Philosophy Differences
 
-### Current Status (December 2024)
+### Current Status (September 2025)
 
 The Python and JavaScript implementations use different IV optimization philosophies, resulting in small but noticeable stat differences (typically 0.1-0.2 points).
 
@@ -179,5 +187,5 @@ The Python and JavaScript implementations use different IV optimization philosop
 
 ---
 
-*Last Updated: December 2024*
+*Last Updated: September 2025*
 *Status: CP calculations validated and fixed, IV optimization differences documented*
