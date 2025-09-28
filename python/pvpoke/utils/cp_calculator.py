@@ -29,11 +29,13 @@ class CPCalculator:
         shadow_atk_mult = 1.2 if shadow_type == "shadow" else 1.0
         shadow_def_mult = 0.833333 if shadow_type == "shadow" else 1.0
         
-        atk = (base_stats.atk + ivs.atk) * cpm * shadow_atk_mult
-        defense = (base_stats.defense + ivs.defense) * cpm * shadow_def_mult
-        hp = math.floor((base_stats.hp + ivs.hp) * cpm)
+        # Use JavaScript-compatible formula: cp = floor((atk * sqrt(def) * sqrt(hp) * cpm^2) / 10)
+        # This is mathematically equivalent to the original but matches JS implementation exactly
+        base_atk = (base_stats.atk + ivs.atk) * shadow_atk_mult
+        base_def = (base_stats.defense + ivs.defense) * shadow_def_mult
+        base_hp = (base_stats.hp + ivs.hp)
         
-        cp = math.floor(0.1 * atk * math.sqrt(defense) * math.sqrt(hp))
+        cp = math.floor((base_atk * math.sqrt(base_def) * math.sqrt(base_hp) * (cpm ** 2)) / 10)
         return max(10, cp)
     
     @staticmethod

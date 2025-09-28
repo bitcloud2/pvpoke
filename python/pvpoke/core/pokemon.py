@@ -133,9 +133,9 @@ class Pokemon:
     
     def calculate_cp(self) -> int:
         """Calculate CP based on current stats."""
-        stats = self.calculate_stats()
-        cp = math.floor(0.1 * stats.atk * math.sqrt(stats.defense) * math.sqrt(stats.hp))
-        return max(10, cp)  # Minimum CP is 10
+        # Use CPCalculator for consistent CP calculation
+        from ..utils.cp_calculator import CPCalculator
+        return CPCalculator.calculate_cp(self.base_stats, self.ivs, self.level, self.shadow_type)
     
     def reset(self):
         """Reset Pokemon to initial battle state."""
