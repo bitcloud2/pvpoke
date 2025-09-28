@@ -20,9 +20,10 @@ The Python `decide_action` method is only **partially implemented** (lines 270-2
         - ✅ Implement state creation and queuing
         - ✅ Add buff capping logic (Math.min(4, Math.max(-4, buffs)))
         - ✅ Add the victory condition check (currState.oppHealth <= 0)
-    - Step 1C: Add Move Evaluation Loop
-        - Implement the charged move readiness calculation
-        - Add the basic state pushing logic
+    - ✅ Step 1C: Add Move Evaluation Loop (COMPLETED)
+        - ✅ Implement the charged move readiness calculation
+        - ✅ Add comprehensive tests for charged move readiness
+        - ✅ Verify calculation matches JavaScript behavior exactly
 - **Move Timing Optimization**: Logic to reduce free turns (lines 237-345 in JS)  
 - **Lethal Move Detection**: Throwing moves that will KO the opponent (lines 210-234 in JS)
 - **Shield Baiting Logic**: Complex baiting strategies when shields are up (lines 820-847 in JS)

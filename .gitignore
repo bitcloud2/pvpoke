@@ -3,6 +3,7 @@ src/articles/article-assets
 
 **/__pycache__/
 *.pyc
+*.cursor/
 
 # pixi environments
 .pixi
