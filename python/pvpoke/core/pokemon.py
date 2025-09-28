@@ -193,6 +193,27 @@ class Pokemon:
         self.current_hp = stats.hp
         self.energy = 0
         self.stat_buffs = [0, 0]
+        self.shields = 2  # Reset shields to default
+        
+        # Reset buff apply meters for deterministic buff application
+        self.reset_move_buff_meters()
+        
+    def reset_move_buff_meters(self):
+        """Reset buff apply meters on moves for deterministic buff application."""
+        # Reset charged move buff meters
+        if self.charged_move_1 and hasattr(self.charged_move_1, 'buff_chance'):
+            # Initialize like JavaScript: buffApplyMeter = buffApplyChance, except 50% starts at 0
+            if self.charged_move_1.buff_chance == 0.5:
+                self.charged_move_1.buff_apply_meter = 0.0
+            else:
+                self.charged_move_1.buff_apply_meter = self.charged_move_1.buff_chance
+        
+        if self.charged_move_2 and hasattr(self.charged_move_2, 'buff_chance'):
+            # Initialize like JavaScript: buffApplyMeter = buffApplyChance, except 50% starts at 0
+            if self.charged_move_2.buff_chance == 0.5:
+                self.charged_move_2.buff_apply_meter = 0.0
+            else:
+                self.charged_move_2.buff_apply_meter = self.charged_move_2.buff_chance
         
     def get_effective_stat(self, stat_index: int) -> float:
         """Get effective stat with buffs applied. 0=atk, 1=def."""

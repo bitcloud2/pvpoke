@@ -60,6 +60,21 @@ class Battle:
         self.cooldowns = [0, 0]
         self.queued_moves = [None, None]
         
+        # Buff chance modifier: -1 = deterministic (default), 0 = random, 1 = guaranteed
+        self.buff_chance_modifier = -1
+        
+        # Debug mode for detailed logging
+        self.debug_mode = False
+        
+    def set_buff_chance_modifier(self, value: int):
+        """
+        Set buff chance modifier.
+        
+        Args:
+            value: -1 = deterministic, 0 = random, 1 = guaranteed
+        """
+        self.buff_chance_modifier = value
+    
     def set_pokemon(self, pokemon: Pokemon, index: int):
         """Set a Pokemon for battle."""
         if index not in [0, 1]:
@@ -118,14 +133,21 @@ class Battle:
     
     def process_turn(self, log_timeline: bool = False):
         """Process a single turn of combat."""
+        if self.debug_mode:
+            print(f"Turn {self.current_turn}: HP=[{self.pokemon[0].current_hp}, {self.pokemon[1].current_hp}], Energy=[{self.pokemon[0].energy}, {self.pokemon[1].energy}], Cooldowns={self.cooldowns}")
+        
         for i in range(2):
             if self.cooldowns[i] <= 0:
                 # Pokemon can act
                 action = self.decide_action(i)
+                if self.debug_mode:
+                    print(f"  Pokemon {i} action: {action}")
                 self.execute_action(i, action, log_timeline)
             else:
                 # Reduce cooldown
                 self.cooldowns[i] -= 1
+                if self.debug_mode:
+                    print(f"  Pokemon {i} cooling down: {self.cooldowns[i]} remaining")
     
     def decide_action(self, pokemon_index: int) -> Dict:
         """
@@ -203,7 +225,10 @@ class Battle:
             attacker.energy -= move.energy_cost
             
             # Apply buffs/debuffs
-            if move.buff_chance >= 1.0 or self.should_apply_buff(move.buff_chance):
+            should_buff = move.buff_chance >= 1.0 or self.should_apply_buff(move, move.buff_chance)
+            if self.debug_mode:
+                print(f"    Buff check: chance={move.buff_chance}, should_apply={should_buff}")
+            if should_buff:
                 self.apply_buffs(pokemon_index, move)
             
             if log_timeline:
@@ -246,10 +271,42 @@ class Battle:
             return -1
         return 0
     
-    def should_apply_buff(self, chance: float) -> bool:
-        """Determine if a buff should apply based on chance."""
-        import random
-        return random.random() < chance
+    def should_apply_buff(self, move: ChargedMove, chance: float) -> bool:
+        """
+        Determine if a buff should apply based on chance and battle settings.
+        
+        This implements the JavaScript logic:
+        - If buff_chance_modifier == -1: Use deterministic application
+        - If buff_chance_modifier == 0: Use random application  
+        - If buff_chance_modifier == 1: Always apply
+        """
+        if self.buff_chance_modifier == 1:
+            return True  # Always apply
+        elif self.buff_chance_modifier == -1:
+            # Deterministic application using buff apply meter
+            # The meter should already be initialized by reset_move_buff_meters
+            if not hasattr(move, 'buff_apply_meter'):
+                # Fallback initialization if somehow not set
+                if chance == 0.5:
+                    move.buff_apply_meter = 0.0
+                else:
+                    move.buff_apply_meter = chance
+                if self.debug_mode:
+                    print(f"      Fallback buff meter init for {move.move_id}: {move.buff_apply_meter}")
+            
+            start_apply_count = int(move.buff_apply_meter)
+            move.buff_apply_meter += chance
+            result = int(move.buff_apply_meter) > start_apply_count
+            
+            if self.debug_mode:
+                print(f"      Buff meter: {move.move_id} start={start_apply_count}, meter={move.buff_apply_meter:.3f}, result={result}")
+            
+            # If the cumulative activations pass a whole number, apply the buff
+            return result
+        else:
+            # Random application (buff_chance_modifier == 0)
+            import random
+            return random.random() < chance
     
     def reset(self):
         """Reset battle to initial state."""
