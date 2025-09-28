@@ -1,5 +1,8 @@
 src/modules/config.php
 src/articles/article-assets
+
+__pycache__
+
 # pixi environments
 .pixi
 *.egg-info
