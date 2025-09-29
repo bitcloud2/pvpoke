@@ -52,11 +52,12 @@ The Python `decide_action` method is only **partially implemented** (lines 270-2
         - ✅ Add basic lethal move selection logic
         - ✅ Integrate lethal detection into main `decide_action()` method
         - ✅ Add comprehensive test coverage for all lethal detection scenarios
-    - Step 1H: Add Advanced Lethal Detection Logic
-        - Implement multi-move lethal combinations (charged + fast moves)
-        - Add buff/debuff consideration in damage calculations
-        - Handle special cases (opponent at 1 HP after shield)
-        - Add priority ordering for multiple lethal moves
+    - ✅ Step 1H: Add Advanced Lethal Detection Logic (COMPLETED)
+        - ✅ Implement multi-move lethal combinations (charged + fast moves)
+        - ✅ Add buff/debuff consideration in damage calculations
+        - ✅ Handle special cases (opponent at 1 HP after shield)
+        - ✅ Add priority ordering for multiple lethal moves
+        - ✅ Add comprehensive test coverage for all advanced lethal detection scenarios
     - Step 1I: Integrate Lethal Detection with DP Algorithm
         - Add lethal move detection to DP state evaluation
         - Implement immediate victory state handling
@@ -744,12 +745,13 @@ def test_fast_move_lethal():
 
 ## Current Status
 
-✅ **Completed (~45%)**:
+✅ **Completed (~50%)**:
 - Basic ActionLogic class structure
 - Complete DP queue algorithm implementation (Steps 1A-1C)
 - Complete Move Timing Optimization system (Steps 1D-1F)
 - Complete Basic Lethal Move Detection system (Step 1G)
-- Full `decide_action` implementation with DP algorithm, timing optimization, and lethal detection
+- Complete Advanced Lethal Move Detection system (Step 1H)
+- Full `decide_action` implementation with DP algorithm, timing optimization, and advanced lethal detection
 - `decide_random_action` method (complete)
 - `would_shield` method (basic implementation)
 - `choose_option` method (complete)

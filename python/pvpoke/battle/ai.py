@@ -246,26 +246,33 @@ class ActionLogic:
                         {"shielded": False, "buffs": False, "priority": getattr(poke, 'priority', 0)}
                     )
         
-        # LETHAL MOVE DETECTION (Step 1G)
-        # Check for lethal charged moves that can KO the opponent
-        can_ko, lethal_move = ActionLogic.can_ko_opponent(poke, opponent)
-        if can_ko and lethal_move:
-            # Find the index of the lethal move
-            move_index = 0
-            if poke.charged_move_1 == lethal_move:
+        # ADVANCED LETHAL MOVE DETECTION (Steps 1G & 1H)
+        # Check for lethal moves that can KO the opponent (basic + advanced detection)
+        can_ko, lethal_move = ActionLogic.can_ko_opponent_advanced(poke, opponent)
+        if can_ko:
+            # Handle fast move case (lethal_move is None)
+            if lethal_move is None:
+                ActionLogic._log_decision(battle, poke, f" uses lethal fast move")
+                return None  # Use fast move
+            
+            # Handle charged move case
+            if lethal_move:
+                # Find the index of the lethal move
                 move_index = 0
-            elif poke.charged_move_2 == lethal_move:
-                move_index = 1
-            
-            ActionLogic._log_decision(battle, poke, f" uses lethal move {lethal_move.move_id}")
-            
-            return TimelineAction(
-                "charged",
-                poke.index,
-                turns,
-                move_index,
-                {"shielded": False, "buffs": False, "priority": getattr(poke, 'priority', 0)}
-            )
+                if poke.charged_move_1 == lethal_move:
+                    move_index = 0
+                elif poke.charged_move_2 == lethal_move:
+                    move_index = 1
+                
+                ActionLogic._log_decision(battle, poke, f" uses lethal move {lethal_move.move_id}")
+                
+                return TimelineAction(
+                    "charged",
+                    poke.index,
+                    turns,
+                    move_index,
+                    {"shielded": False, "buffs": False, "priority": getattr(poke, 'priority', 0)}
+                )
         
         # MOVE TIMING OPTIMIZATION CHECK (Step 2C)
         # Check if we should optimize timing before proceeding with DP algorithm
@@ -941,7 +948,7 @@ class ActionLogic:
         ActionLogic._log_decision(battle, poke, " is optimizing move timing")
         return True  # Return early, don't throw charged move this turn
     
-    # ========== LETHAL MOVE DETECTION METHODS (Step 1G) ==========
+    # ========== LETHAL MOVE DETECTION METHODS (Steps 1G & 1H) ==========
     
     @staticmethod
     def can_ko_opponent(poke: Pokemon, opponent: Pokemon) -> Tuple[bool, Optional[ChargedMove]]:
@@ -1028,6 +1035,388 @@ class ActionLogic:
         # Sort by move index to maintain JavaScript behavior
         lethal_moves.sort(key=lambda x: x[2])  # Sort by index (third element)
         return lethal_moves[0][0]  # Return the move (first element)
+    
+    # ========== ADVANCED LETHAL DETECTION METHODS (Step 1H) ==========
+    
+    @staticmethod
+    def check_multi_move_lethal(poke: Pokemon, opponent: Pokemon) -> Tuple[bool, List[ChargedMove]]:
+        """
+        Check if combination of moves can KO opponent (e.g., charged move + fast move).
+        
+        Args:
+            poke: Pokemon checking for lethal combinations
+            opponent: Opponent Pokemon
+            
+        Returns:
+            Tuple of (can_ko: bool, move_sequence: List[ChargedMove])
+        """
+        # Only check when opponent has no shields (matches basic lethal detection logic)
+        if opponent.shields > 0:
+            return False, []
+        
+        # Don't check if farming energy
+        if getattr(poke, 'farm_energy', False):
+            return False, []
+        
+        # Get active charged moves
+        active_charged_moves = []
+        if poke.charged_move_1:
+            active_charged_moves.append(poke.charged_move_1)
+        if poke.charged_move_2:
+            active_charged_moves.append(poke.charged_move_2)
+        
+        # Check charged move + fast move combinations
+        for charged_move in active_charged_moves:
+            if poke.energy >= charged_move.energy_cost:
+                charged_damage = ActionLogic.calculate_lethal_damage(poke, opponent, charged_move)
+                fast_damage = ActionLogic.calculate_lethal_damage(poke, opponent, poke.fast_move)
+                
+                # Calculate remaining HP after charged move
+                remaining_hp = opponent.current_hp - charged_damage
+                
+                # Check if fast move can finish the opponent
+                if remaining_hp > 0 and fast_damage >= remaining_hp:
+                    # Apply same constraints as basic lethal detection
+                    if (not getattr(charged_move, 'self_debuffing', False) and
+                        opponent.current_hp > poke.fast_move.damage):  # Don't use if opponent would faint from fast move anyway
+                        return True, [charged_move]  # Return just the charged move, fast move is implied
+        
+        return False, []
+    
+    @staticmethod
+    def calculate_buffed_lethal_damage(attacker: Pokemon, defender: Pokemon, move: ChargedMove, 
+                                     attack_buff: int = 0, defense_buff: int = 0) -> int:
+        """
+        Calculate lethal damage considering current buff/debuff states.
+        
+        Args:
+            attacker: Pokemon using the move
+            defender: Pokemon receiving the move
+            move: Move being used
+            attack_buff: Attack buff stage (-4 to +4)
+            defense_buff: Defense buff stage (-4 to +4)
+            
+        Returns:
+            Expected damage with buffs applied
+        """
+        # Get current attack multiplier
+        attack_multiplier = ActionLogic.get_attack_multiplier(attack_buff)
+        
+        # Get current defense multiplier  
+        defense_multiplier = ActionLogic.get_defense_multiplier(defense_buff)
+        
+        # Calculate base damage with standard method first
+        base_damage = DamageCalculator.calculate_damage(attacker, defender, move)
+        
+        # Apply buff multipliers to the damage
+        # This is a simplified approach - in a full implementation, we'd modify the stats before damage calculation
+        buffed_damage = int(base_damage * attack_multiplier / defense_multiplier)
+        
+        return max(1, buffed_damage)  # Minimum 1 damage
+    
+    @staticmethod
+    def get_attack_multiplier(buff_stage: int) -> float:
+        """Convert buff stage to attack multiplier."""
+        multipliers = {-4: 0.5, -3: 0.571, -2: 0.667, -1: 0.8, 0: 1.0, 
+                      1: 1.25, 2: 1.5, 3: 1.75, 4: 2.0}
+        return multipliers.get(buff_stage, 1.0)
+    
+    @staticmethod
+    def get_defense_multiplier(buff_stage: int) -> float:
+        """Convert buff stage to defense multiplier."""
+        multipliers = {-4: 2.0, -3: 1.75, -2: 1.5, -1: 1.25, 0: 1.0,
+                      1: 0.8, 2: 0.667, 3: 0.571, 4: 0.5}
+        return multipliers.get(buff_stage, 1.0)
+    
+    @staticmethod
+    def handle_special_lethal_cases(poke: Pokemon, opponent: Pokemon) -> Tuple[bool, Optional[ChargedMove]]:
+        """
+        Handle special lethal scenarios.
+        
+        Args:
+            poke: Pokemon checking for special lethal cases
+            opponent: Opponent Pokemon
+            
+        Returns:
+            Tuple of (can_ko: bool, lethal_move: Optional[ChargedMove])
+            
+        Cases:
+        1. Opponent at 1 HP (any move is lethal)
+        2. Opponent with very low HP (2-5 HP)
+        3. Self-debuffing moves that might still be lethal
+        """
+        # Only check when opponent has no shields (consistent with basic lethal detection)
+        if opponent.shields > 0:
+            return False, None
+        
+        # Don't check if farming energy
+        if getattr(poke, 'farm_energy', False):
+            return False, None
+        
+        # Case 1: Opponent at 1 HP (common after shielded charged move)
+        if opponent.current_hp == 1:
+            # Any move will KO, prefer fast move to save energy (but we return None for fast move)
+            # Check if we have any charged moves available first
+            active_charged_moves = []
+            if poke.charged_move_1:
+                active_charged_moves.append(poke.charged_move_1)
+            if poke.charged_move_2:
+                active_charged_moves.append(poke.charged_move_2)
+            
+            # If we have charged moves with energy, use the most efficient one
+            available_moves = []
+            for move in active_charged_moves:
+                if poke.energy >= move.energy_cost:
+                    available_moves.append(move)
+            
+            if available_moves:
+                # Use the lowest energy cost move
+                best_move = min(available_moves, key=lambda m: m.energy_cost)
+                return True, best_move
+            else:
+                # Use fast move (return None to indicate fast move)
+                return True, None
+        
+        # Case 2: Very low HP opponent (2-5 HP)
+        if 2 <= opponent.current_hp <= 5:
+            # Check if fast move is sufficient (return None for fast move)
+            fast_damage = ActionLogic.calculate_lethal_damage(poke, opponent, poke.fast_move)
+            if fast_damage >= opponent.current_hp:
+                return True, None  # Use fast move
+        
+        # Case 3: Self-debuffing moves (like Superpower) - check if they're still lethal
+        active_charged_moves = []
+        if poke.charged_move_1:
+            active_charged_moves.append(poke.charged_move_1)
+        if poke.charged_move_2:
+            active_charged_moves.append(poke.charged_move_2)
+        
+        for move in active_charged_moves:
+            if (poke.energy >= move.energy_cost and 
+                getattr(move, 'self_debuffing', False)):
+                # Calculate damage before self-debuff applies
+                damage = ActionLogic.calculate_lethal_damage(poke, opponent, move)
+                if damage >= opponent.current_hp:
+                    return True, move
+        
+        return False, None
+    
+    @staticmethod
+    def select_best_lethal_move_advanced(lethal_moves: List[Tuple[ChargedMove, int, int]], 
+                                       multi_move_options: List[ChargedMove],
+                                       special_case_move: Optional[ChargedMove]) -> ChargedMove:
+        """
+        Select the most efficient lethal move from all available options.
+        
+        Args:
+            lethal_moves: List of (move, damage, index) tuples from basic detection
+            multi_move_options: List of moves from multi-move combinations
+            special_case_move: Move from special case handling
+            
+        Returns:
+            The best lethal move based on priority ordering
+            
+        Priority order (matching JavaScript ActionLogic behavior):
+        1. Fast moves (represented as None - handled by caller)
+        2. Special case moves (opponent at 1 HP) - prefer lowest energy cost
+        3. Single lethal moves - prefer move index 0, then lowest energy cost
+        4. Buffed lethal moves - prefer lowest energy cost
+        5. Multi-move combinations (as backup) - prefer lowest energy cost
+        """
+        all_options = []
+        
+        # Add basic lethal moves with JavaScript-style priority
+        for move, damage, index in lethal_moves:
+            # JavaScript prefers move index 0 over index 1, then energy efficiency
+            priority_score = (index * 1000) + move.energy_cost  # Index 0 gets lower score
+            all_options.append((move, priority_score, 'basic', index, damage))
+        
+        # Add multi-move options (these require charged + fast, so higher priority score)
+        for move in multi_move_options:
+            # Multi-move combinations are less efficient, significant penalty
+            priority_score = 5000 + move.energy_cost  # High base score for multi-move
+            all_options.append((move, priority_score, 'multi', 0, 0))
+        
+        # Add special case move
+        if special_case_move:
+            # Special cases get high priority (very low score)
+            priority_score = special_case_move.energy_cost  # Just energy cost, no penalties
+            all_options.append((special_case_move, priority_score, 'special', 0, 0))
+        
+        if not all_options:
+            return None
+        
+        # Sort by priority score (lower is better)
+        # This naturally handles: special cases first, then basic moves by index/energy, then multi-moves
+        all_options.sort(key=lambda x: x[1])
+        
+        return all_options[0][0]  # Return the best move
+    
+    @staticmethod
+    def calculate_move_efficiency_score(move: ChargedMove, damage: int, move_type: str, index: int = 0) -> float:
+        """
+        Calculate efficiency score for lethal move prioritization.
+        
+        Args:
+            move: The charged move
+            damage: Damage the move would deal
+            move_type: Type of lethal detection ('basic', 'multi', 'special', 'buffed')
+            index: Move index (0 or 1)
+            
+        Returns:
+            Efficiency score (lower is better)
+        """
+        # Base score is energy cost
+        score = move.energy_cost
+        
+        # JavaScript-style move index preference (index 0 preferred)
+        if move_type == 'basic':
+            score += index * 100  # Penalty for move index 1
+        
+        # Type-based adjustments
+        type_penalties = {
+            'special': -50,    # Special cases get priority
+            'basic': 0,        # No penalty for basic lethal moves
+            'buffed': 25,      # Slight penalty for buffed moves (less reliable)
+            'multi': 200       # Significant penalty for multi-move combinations
+        }
+        
+        score += type_penalties.get(move_type, 0)
+        
+        # Slight preference for higher damage (overkill scenarios)
+        # But energy efficiency is more important
+        score -= (damage / 100)  # Small bonus for higher damage
+        
+        # Penalty for self-debuffing moves (like Superpower)
+        if getattr(move, 'self_debuffing', False):
+            score += 50
+        
+        return score
+    
+    @staticmethod
+    def can_ko_opponent_advanced(poke: Pokemon, opponent: Pokemon) -> Tuple[bool, Optional[ChargedMove]]:
+        """
+        Advanced lethal move detection that combines all detection methods.
+        
+        Args:
+            poke: Pokemon checking for lethal moves
+            opponent: Opponent Pokemon
+            
+        Returns:
+            Tuple of (can_ko: bool, lethal_move: Optional[ChargedMove])
+            None for lethal_move indicates fast move should be used
+        """
+        # Check basic lethal moves first
+        basic_lethal, basic_move = ActionLogic.can_ko_opponent(poke, opponent)
+        
+        # Check multi-move combinations
+        multi_lethal, multi_moves = ActionLogic.check_multi_move_lethal(poke, opponent)
+        
+        # Check special cases
+        special_lethal, special_move = ActionLogic.handle_special_lethal_cases(poke, opponent)
+        
+        # Check buff-enhanced lethal moves (moves that aren't normally lethal but become lethal with buffs)
+        buff_lethal, buff_move = ActionLogic.check_buffed_lethal_moves(poke, opponent)
+        
+        # If no lethal options found
+        if not (basic_lethal or multi_lethal or special_lethal or buff_lethal):
+            return False, None
+        
+        # Handle fast move case (special case returned None)
+        if special_lethal and special_move is None:
+            return True, None  # Use fast move
+        
+        # Collect all lethal moves for priority selection
+        lethal_moves = []
+        if basic_lethal and basic_move:
+            # Find the index of the basic move
+            move_index = 0
+            if poke.charged_move_1 == basic_move:
+                move_index = 0
+            elif poke.charged_move_2 == basic_move:
+                move_index = 1
+            
+            damage = ActionLogic.calculate_lethal_damage(poke, opponent, basic_move)
+            lethal_moves.append((basic_move, damage, move_index))
+        
+        # Add buff-enhanced lethal moves
+        if buff_lethal and buff_move:
+            move_index = 0
+            if poke.charged_move_1 == buff_move:
+                move_index = 0
+            elif poke.charged_move_2 == buff_move:
+                move_index = 1
+            
+            # Get current buff states
+            attack_buff = getattr(poke, 'stat_buffs', [0, 0])[0] if hasattr(poke, 'stat_buffs') else 0
+            defense_buff = getattr(opponent, 'stat_buffs', [0, 0])[1] if hasattr(opponent, 'stat_buffs') else 0
+            
+            damage = ActionLogic.calculate_buffed_lethal_damage(poke, opponent, buff_move, attack_buff, defense_buff)
+            lethal_moves.append((buff_move, damage, move_index))
+        
+        multi_move_options = multi_moves if multi_lethal else []
+        
+        # Select the best option
+        best_move = ActionLogic.select_best_lethal_move_advanced(
+            lethal_moves, multi_move_options, special_move
+        )
+        
+        return True, best_move
+    
+    @staticmethod
+    def check_buffed_lethal_moves(poke: Pokemon, opponent: Pokemon) -> Tuple[bool, Optional[ChargedMove]]:
+        """
+        Check if any moves become lethal when considering current buff/debuff states.
+        
+        Args:
+            poke: Pokemon checking for buffed lethal moves
+            opponent: Opponent Pokemon
+            
+        Returns:
+            Tuple of (can_ko: bool, lethal_move: Optional[ChargedMove])
+        """
+        # Only check when opponent has no shields (consistent with other lethal detection)
+        if opponent.shields > 0:
+            return False, None
+        
+        # Don't check if farming energy
+        if getattr(poke, 'farm_energy', False):
+            return False, None
+        
+        # Get current buff states
+        attack_buff = getattr(poke, 'stat_buffs', [0, 0])[0] if hasattr(poke, 'stat_buffs') else 0
+        defense_buff = getattr(opponent, 'stat_buffs', [0, 0])[1] if hasattr(opponent, 'stat_buffs') else 0
+        
+        # If no buffs are active, skip this check
+        if attack_buff == 0 and defense_buff == 0:
+            return False, None
+        
+        # Get active charged moves
+        active_charged_moves = []
+        if poke.charged_move_1:
+            active_charged_moves.append(poke.charged_move_1)
+        if poke.charged_move_2:
+            active_charged_moves.append(poke.charged_move_2)
+        
+        # Check each charged move with buff consideration
+        for move in active_charged_moves:
+            if poke.energy >= move.energy_cost:
+                # Calculate damage with current buffs
+                buffed_damage = ActionLogic.calculate_buffed_lethal_damage(
+                    poke, opponent, move, attack_buff, defense_buff
+                )
+                
+                # Calculate normal damage for comparison
+                normal_damage = ActionLogic.calculate_lethal_damage(poke, opponent, move)
+                
+                # Only consider this a "buffed lethal" if buffs made the difference
+                if buffed_damage >= opponent.current_hp and normal_damage < opponent.current_hp:
+                    # Apply same constraints as basic lethal detection
+                    if (not getattr(move, 'self_debuffing', False) and
+                        opponent.current_hp > poke.fast_move.damage):
+                        return True, move
+        
+        return False, None
     
     @staticmethod
     def _log_decision(battle, poke: Pokemon, message: str):
