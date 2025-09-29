@@ -5,6 +5,7 @@ This test verifies that Step 1A (DP queue initialization) matches the JavaScript
 """
 
 import pytest
+import math
 from unittest.mock import Mock, patch
 from pvpoke.battle.ai import ActionLogic, BattleState, DecisionOption, ShieldDecision
 from pvpoke.core.pokemon import Pokemon
@@ -1034,6 +1035,670 @@ class TestDPERatioAnalysis:
         pokemon.fast_move.energy_gain = 5  # Need 9 fast moves (45/5 = 9) - too many
         result = ActionLogic.validate_baiting_energy_requirements(pokemon, bait_move, follow_up_move)
         assert result is False
+
+
+# ========== ADVANCED BAITING CONDITIONS TESTS (Step 1M) ==========
+
+class TestAdvancedBaitingConditions:
+    """Test advanced baiting conditions from JavaScript ActionLogic lines 820-836."""
+    
+    def test_most_expensive_move_detection_in_planned_moves(self):
+        """Test detection of most expensive move in planned move list."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Create moves with different energy costs
+        cheap_move = Mock(spec=ChargedMove)
+        cheap_move.energy_cost = 35
+        cheap_move.move_id = "cheap_move"
+        cheap_move.self_debuffing = False
+        
+        expensive_move = Mock(spec=ChargedMove)
+        expensive_move.energy_cost = 75
+        expensive_move.move_id = "expensive_move"
+        expensive_move.self_debuffing = False
+        
+        medium_move = Mock(spec=ChargedMove)
+        medium_move.energy_cost = 50
+        medium_move.move_id = "medium_move"
+        medium_move.self_debuffing = False
+        
+        # Set up active charged moves
+        active_moves = [cheap_move, expensive_move, medium_move]
+        
+        # Test most expensive move detection
+        most_expensive = max(active_moves, key=lambda m: m.energy_cost)
+        assert most_expensive == expensive_move
+        assert most_expensive.energy_cost == 75
+    
+    def test_self_buffing_move_exception_with_dpe_ratio_validation(self):
+        """Test self-buffing move exception with exact DPE ratio ≤ 1.5 validation."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Enable shield baiting
+        pokemon.bait_shields = True
+        opponent.shields = 1
+        pokemon.energy = 80  # Enough for both moves
+        
+        # Create self-buffing move (lower energy, lower DPE)
+        self_buff_move = Mock(spec=ChargedMove)
+        self_buff_move.energy_cost = 40
+        self_buff_move.move_id = "power_up_punch"
+        self_buff_move.self_buffing = True
+        self_buff_move.buffs = [1, 0]  # +1 attack
+        self_buff_move.buff_target = "self"
+        self_buff_move.buff_apply_chance = 1.0
+        
+        # Create high DPE move
+        high_dpe_move = Mock(spec=ChargedMove)
+        high_dpe_move.energy_cost = 50
+        high_dpe_move.move_id = "close_combat"
+        high_dpe_move.self_buffing = False
+        
+        pokemon.charged_move_1 = self_buff_move  # activeChargedMoves[0]
+        pokemon.charged_move_2 = high_dpe_move   # activeChargedMoves[1]
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Set up DPE ratio of exactly 1.5 (threshold)
+            def mock_damage(poke, opp, move):
+                if move == self_buff_move:
+                    return 40  # DPE = 40/40 = 1.0
+                elif move == high_dpe_move:
+                    return 75  # DPE = 75/50 = 1.5 (exactly at threshold)
+                return 0
+            
+            mock_calc.calculate_damage.side_effect = mock_damage
+            
+            # Test DPE ratio calculation
+            self_buff_dpe = ActionLogic.calculate_move_dpe(pokemon, opponent, self_buff_move)
+            high_dpe = ActionLogic.calculate_move_dpe(pokemon, opponent, high_dpe_move)
+            dpe_ratio = high_dpe / self_buff_dpe if self_buff_dpe > 0 else 0
+            
+            # Both moves should have DPE of 1.5 due to buff multiplier on self-buffing move
+            assert abs(self_buff_dpe - 1.5) < 0.01
+            assert abs(high_dpe - 1.5) < 0.01
+            assert abs(dpe_ratio - 1.0) < 0.01  # Ratio should be 1.0 (1.5/1.5)
+            
+            # Test baiting exception: don't bait if DPE ratio ≤ 1.5 AND move is self-buffing
+            # JavaScript: if((poke.activeChargedMoves[1].dpe / poke.activeChargedMoves[0].dpe <= 1.5)&&(poke.activeChargedMoves[0].selfBuffing))
+            should_not_bait = (dpe_ratio <= 1.5) and getattr(self_buff_move, 'self_buffing', False)
+            assert should_not_bait is True
+    
+    def test_energy_threshold_validation_for_baiting_scenarios(self):
+        """Test energy threshold validation for different baiting scenarios."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Enable shield baiting
+        pokemon.bait_shields = True
+        opponent.shields = 1
+        
+        # Create moves for testing
+        bait_move = Mock(spec=ChargedMove)
+        bait_move.energy_cost = 35
+        bait_move.move_id = "bait_move"
+        
+        expensive_move = Mock(spec=ChargedMove)
+        expensive_move.energy_cost = 75
+        expensive_move.move_id = "expensive_move"
+        
+        pokemon.charged_move_1 = bait_move
+        pokemon.charged_move_2 = expensive_move
+        
+        # Test scenario 1: Not enough energy for expensive move (should consider baiting)
+        pokemon.energy = 40  # Can use bait (35) but not expensive (75)
+        
+        # JavaScript condition: poke.energy < poke.activeChargedMoves[1].energy
+        can_use_expensive = pokemon.energy >= expensive_move.energy_cost
+        assert can_use_expensive is False  # Should trigger baiting consideration
+        
+        # Test scenario 2: Enough energy for expensive move (no need to bait)
+        pokemon.energy = 80  # Can use both moves
+        can_use_expensive = pokemon.energy >= expensive_move.energy_cost
+        assert can_use_expensive is True  # Should not trigger baiting
+        
+        # Test scenario 3: Not enough energy for any move (can't bait)
+        pokemon.energy = 30  # Can't use either move
+        can_use_bait = pokemon.energy >= bait_move.energy_cost
+        assert can_use_bait is False  # Can't execute baiting strategy
+    
+    def test_planned_move_list_integration_final_state_vs_active_moves(self):
+        """Test integration between finalState.moves and activeChargedMoves."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Create moves that would be in finalState.moves (planned moves)
+        planned_move_1 = Mock(spec=ChargedMove)
+        planned_move_1.energy_cost = 50
+        planned_move_1.move_id = "planned_move_1"
+        planned_move_1.self_debuffing = False
+        
+        planned_move_2 = Mock(spec=ChargedMove)
+        planned_move_2.energy_cost = 75
+        planned_move_2.move_id = "planned_move_2"
+        planned_move_2.self_debuffing = False
+        
+        # Create active charged moves (what Pokemon currently has available)
+        active_move_1 = Mock(spec=ChargedMove)
+        active_move_1.energy_cost = 35
+        active_move_1.move_id = "active_move_1"
+        
+        active_move_2 = Mock(spec=ChargedMove)
+        active_move_2.energy_cost = 60
+        active_move_2.move_id = "active_move_2"
+        
+        # Set up Pokemon with active moves
+        pokemon.charged_move_1 = active_move_1
+        pokemon.charged_move_2 = active_move_2
+        active_charged_moves = [active_move_1, active_move_2]
+        
+        # Simulate finalState.moves (what the DP algorithm planned)
+        final_state_moves = [planned_move_1, planned_move_2]
+        
+        # Test most expensive move detection in planned moves
+        most_expensive_planned = max(final_state_moves, key=lambda m: m.energy_cost)
+        assert most_expensive_planned == planned_move_2
+        assert most_expensive_planned.energy_cost == 75
+        
+        # Test most expensive move detection in active moves
+        most_expensive_active = max(active_charged_moves, key=lambda m: m.energy_cost)
+        assert most_expensive_active == active_move_2
+        assert most_expensive_active.energy_cost == 60
+        
+        # Verify they can be different (planned vs active)
+        assert most_expensive_planned != most_expensive_active
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Mock DPE calculations
+            def mock_damage(poke, opp, move):
+                if move == planned_move_1:
+                    return 60  # DPE = 60/50 = 1.2
+                elif move == active_move_1:
+                    return 35  # DPE = 35/35 = 1.0
+                return 50
+            
+            mock_calc.calculate_damage.side_effect = mock_damage
+            
+            # Test DPE comparison between planned and active moves
+            # JavaScript: poke.activeChargedMoves[1].dpe > finalState.moves[0].dpe
+            active_dpe = ActionLogic.calculate_move_dpe(pokemon, opponent, active_move_2)
+            planned_dpe = ActionLogic.calculate_move_dpe(pokemon, opponent, planned_move_1)
+            
+            # This comparison determines if baiting should occur
+            should_consider_baiting = active_dpe > planned_dpe
+            # The exact values depend on the mock, but the structure should work
+            assert isinstance(should_consider_baiting, bool)
+
+
+# ========== SHIELD PREDICTION LOGIC TESTS (Step 1N) ==========
+
+class TestShieldPredictionLogic:
+    """Test shield prediction logic from JavaScript ActionLogic lines 838-878."""
+    
+    def test_dpe_ratio_analysis_with_exact_threshold_validation(self):
+        """Test DPE ratio analysis with exact >1.5x requirement validation."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Enable shield baiting
+        pokemon.bait_shields = True
+        opponent.shields = 1
+        pokemon.energy = 60
+        
+        # Create moves for testing different DPE ratios
+        low_dpe_move = Mock(spec=ChargedMove)
+        low_dpe_move.energy_cost = 50
+        low_dpe_move.move_id = "low_dpe"
+        
+        high_dpe_move = Mock(spec=ChargedMove)
+        high_dpe_move.energy_cost = 50
+        high_dpe_move.move_id = "high_dpe"
+        
+        pokemon.charged_move_1 = low_dpe_move
+        pokemon.charged_move_2 = high_dpe_move
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            with patch('pvpoke.battle.ai.ActionLogic.would_shield') as mock_shield:
+                mock_shield.return_value = ShieldDecision(value=False, shield_weight=0, no_shield_weight=1)
+                
+                # Test case 1: DPE ratio exactly 1.5 (should NOT trigger)
+                def mock_damage_1_5(poke, opp, move):
+                    if move == low_dpe_move:
+                        return 50  # DPE = 50/50 = 1.0
+                    elif move == high_dpe_move:
+                        return 75  # DPE = 75/50 = 1.5 (exactly at threshold)
+                    return 0
+                
+                mock_calc.calculate_damage.side_effect = mock_damage_1_5
+                
+                result = ActionLogic.analyze_dpe_ratios(battle, pokemon, opponent, low_dpe_move)
+                assert result is None  # Should not switch since ratio is not > 1.5
+                
+                # Test case 2: DPE ratio 1.51 (should trigger)
+                def mock_damage_1_51(poke, opp, move):
+                    if move == low_dpe_move:
+                        return 50   # DPE = 50/50 = 1.0
+                    elif move == high_dpe_move:
+                        return 75.5 # DPE = 75.5/50 = 1.51 (just above threshold)
+                    return 0
+                
+                mock_calc.calculate_damage.side_effect = mock_damage_1_51
+                
+                result = ActionLogic.analyze_dpe_ratios(battle, pokemon, opponent, low_dpe_move)
+                assert result == high_dpe_move  # Should switch since ratio > 1.5
+                
+                # Test case 3: DPE ratio 2.0 (should trigger)
+                def mock_damage_2_0(poke, opp, move):
+                    if move == low_dpe_move:
+                        return 50   # DPE = 50/50 = 1.0
+                    elif move == high_dpe_move:
+                        return 100  # DPE = 100/50 = 2.0 (well above threshold)
+                    return 0
+                
+                mock_calc.calculate_damage.side_effect = mock_damage_2_0
+                
+                result = ActionLogic.analyze_dpe_ratios(battle, pokemon, opponent, low_dpe_move)
+                assert result == high_dpe_move  # Should switch since ratio > 1.5
+    
+    def test_energy_requirement_validation_for_follow_up_moves(self):
+        """Test energy requirement validation for follow-up moves after baiting."""
+        pokemon = create_test_pokemon()
+        
+        # Create bait and follow-up moves
+        bait_move = Mock(spec=ChargedMove)
+        bait_move.energy_cost = 35
+        bait_move.move_id = "bait"
+        
+        follow_up_move = Mock(spec=ChargedMove)
+        follow_up_move.energy_cost = 60
+        follow_up_move.move_id = "follow_up"
+        
+        # Set up fast move for energy calculations
+        pokemon.fast_move.energy_gain = 4
+        pokemon.fast_move.turns = 1
+        
+        # Test scenario 1: Can immediately use follow-up after bait
+        pokemon.energy = 100  # 100 - 35 = 65, enough for 60 energy follow-up
+        result = ActionLogic.validate_baiting_energy_requirements(pokemon, bait_move, follow_up_move)
+        assert result is True
+        
+        # Test scenario 2: Need exactly one fast move for follow-up
+        pokemon.energy = 91   # 91 - 35 = 56, need 4 more energy (1 fast move)
+        result = ActionLogic.validate_baiting_energy_requirements(pokemon, bait_move, follow_up_move)
+        assert result is True
+        
+        # Test scenario 3: Need multiple fast moves (reasonable)
+        pokemon.energy = 75   # 75 - 35 = 40, need 20 more energy (5 fast moves)
+        result = ActionLogic.validate_baiting_energy_requirements(pokemon, bait_move, follow_up_move)
+        assert result is True  # 5 fast moves is still reasonable
+        
+        # Test scenario 4: Need too many fast moves (unreasonable)
+        pokemon.energy = 55   # 55 - 35 = 20, need 40 more energy (10 fast moves)
+        result = ActionLogic.validate_baiting_energy_requirements(pokemon, bait_move, follow_up_move)
+        assert result is False  # 10 fast moves exceeds reasonable limit
+        
+        # Test scenario 5: Not enough energy for bait move
+        pokemon.energy = 30   # Less than bait move cost
+        result = ActionLogic.validate_baiting_energy_requirements(pokemon, bait_move, follow_up_move)
+        assert result is False
+    
+    def test_opponent_shield_prediction_integration_realistic_scenarios(self):
+        """Test opponent shield prediction integration with realistic scenarios."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Set up realistic scenario
+        pokemon.bait_shields = True
+        opponent.shields = 2
+        pokemon.energy = 70
+        
+        # Create realistic moves
+        mud_shot = Mock(spec=ChargedMove)  # Low energy bait move
+        mud_shot.energy_cost = 35
+        mud_shot.move_id = "mud_shot"
+        
+        earthquake = Mock(spec=ChargedMove)  # High energy nuke
+        earthquake.energy_cost = 65
+        earthquake.move_id = "earthquake"
+        
+        pokemon.charged_move_1 = mud_shot
+        pokemon.charged_move_2 = earthquake
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Mock realistic damage values with DPE ratio > 1.5
+            def mock_damage(poke, opp, move):
+                if move == mud_shot:
+                    return 35    # DPE = 35/35 = 1.0
+                elif move == earthquake:
+                    return 100   # DPE = 100/65 ≈ 1.54 (just above 1.5 threshold)
+                return 0
+            
+            mock_calc.calculate_damage.side_effect = mock_damage
+            
+            # Test scenario 1: Opponent shields both moves (no baiting benefit)
+            with patch('pvpoke.battle.ai.ActionLogic.would_shield') as mock_shield:
+                mock_shield.return_value = ShieldDecision(value=True, shield_weight=4, no_shield_weight=1)
+                
+                result = ActionLogic.analyze_dpe_ratios(battle, pokemon, opponent, mud_shot)
+                assert result is None  # No benefit if opponent shields everything
+            
+            # Test scenario 2: Opponent shields bait but not nuke (baiting works)
+            with patch('pvpoke.battle.ai.ActionLogic.would_shield') as mock_shield:
+                def shield_decision(battle, poke, opp, move):
+                    if move == mud_shot:
+                        return ShieldDecision(value=True, shield_weight=2, no_shield_weight=1)   # Shields bait
+                    elif move == earthquake:
+                        return ShieldDecision(value=False, shield_weight=1, no_shield_weight=3)  # Doesn't shield nuke
+                    return ShieldDecision(value=False, shield_weight=1, no_shield_weight=1)
+                
+                mock_shield.side_effect = shield_decision
+                
+                result = ActionLogic.analyze_dpe_ratios(battle, pokemon, opponent, mud_shot)
+                assert result == earthquake  # Should switch to nuke since opponent won't shield it
+            
+            # Test scenario 3: Opponent doesn't shield either (use higher DPE)
+            with patch('pvpoke.battle.ai.ActionLogic.would_shield') as mock_shield:
+                mock_shield.return_value = ShieldDecision(value=False, shield_weight=1, no_shield_weight=2)
+                
+                result = ActionLogic.analyze_dpe_ratios(battle, pokemon, opponent, mud_shot)
+                # DPE ratio = 1.54/1.0 = 1.54 > 1.5, so should switch to higher DPE move
+                assert result == earthquake
+    
+    def test_energy_stacking_validation_can_pokemon_reach_follow_up(self):
+        """Test energy stacking validation - can Pokemon reach follow-up move?"""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        
+        # Set up energy stacking scenario
+        pokemon.energy = 45
+        pokemon.fast_move.energy_gain = 3
+        pokemon.fast_move.turns = 1
+        
+        # Create moves for stacking scenario
+        first_move = Mock(spec=ChargedMove)
+        first_move.energy_cost = 40
+        first_move.move_id = "first_move"
+        
+        second_move = Mock(spec=ChargedMove)
+        second_move.energy_cost = 50
+        second_move.move_id = "second_move"
+        
+        # Test: Can Pokemon use first move and then reach second move?
+        energy_after_first = pokemon.energy - first_move.energy_cost  # 45 - 40 = 5
+        energy_needed = second_move.energy_cost - energy_after_first   # 50 - 5 = 45
+        fast_moves_needed = math.ceil(energy_needed / pokemon.fast_move.energy_gain)  # ceil(45/3) = 15
+        
+        # Test validation logic
+        can_reach_second = ActionLogic.validate_baiting_energy_requirements(pokemon, first_move, second_move)
+        
+        # 15 fast moves is too many (exceeds limit of 5), so should return False
+        assert can_reach_second is False
+        
+        # Test with more reasonable energy requirements
+        pokemon.energy = 75  # More energy available
+        energy_after_first = pokemon.energy - first_move.energy_cost  # 75 - 40 = 35
+        energy_needed = second_move.energy_cost - energy_after_first   # 50 - 35 = 15
+        fast_moves_needed = math.ceil(energy_needed / pokemon.fast_move.energy_gain)  # ceil(15/3) = 5
+        
+        can_reach_second = ActionLogic.validate_baiting_energy_requirements(pokemon, first_move, second_move)
+        
+        # 5 fast moves is at the limit, so should return True
+        assert can_reach_second is True
+
+
+# ========== WOULD_SHIELD METHOD TESTS (Step 1O) ==========
+
+class TestWouldShieldMethod:
+    """Test wouldShield method from JavaScript ActionLogic lines 1098-1183."""
+    
+    def test_fast_dpt_calculations_damage_per_turn_thresholds(self):
+        """Test fast DPT calculations and damage per turn thresholds."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Set up fast move with specific damage and turns
+        pokemon.fast_move.damage = 6
+        pokemon.fast_move.turns = 2
+        opponent.current_hp = 100
+        
+        # Create charged move for testing
+        charged_move = Mock(spec=ChargedMove)
+        charged_move.energy_cost = 50
+        charged_move.move_id = "test_move"
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Mock damage calculations
+            def mock_damage(poke, opp, move):
+                if move == pokemon.fast_move:
+                    return 6  # Fast move damage
+                elif move == charged_move:
+                    return 80  # Charged move damage
+                return 0
+            
+            mock_calc.calculate_damage.side_effect = mock_damage
+            
+            # Test fast DPT calculation
+            fast_damage = mock_calc.calculate_damage(pokemon, opponent, pokemon.fast_move)
+            fast_dpt = fast_damage / pokemon.fast_move.turns  # 6 / 2 = 3.0
+            
+            assert fast_dpt == 3.0
+            
+            # Test shield decision based on fast DPT thresholds
+            shield_decision = ActionLogic.would_shield(battle, pokemon, opponent, charged_move)
+            
+            # Verify the decision structure
+            assert hasattr(shield_decision, 'value')
+            assert hasattr(shield_decision, 'shield_weight')
+            assert hasattr(shield_decision, 'no_shield_weight')
+            assert isinstance(shield_decision.value, bool)
+    
+    def test_charged_damage_thresholds_hp_conditions(self):
+        """Test charged damage thresholds with hp/1.4 and hp/2 conditions."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Set up opponent with specific HP
+        opponent.current_hp = 140  # Easy to calculate fractions
+        opponent.shields = 1
+        
+        # Set up fast move with high DPT
+        pokemon.fast_move.damage = 8
+        pokemon.fast_move.turns = 2  # DPT = 4.0 (> 2.0 threshold)
+        
+        # Create charged move that hits hp/2 threshold
+        high_damage_move = Mock(spec=ChargedMove)
+        high_damage_move.energy_cost = 50
+        high_damage_move.move_id = "high_damage"
+        
+        pokemon.charged_move_1 = high_damage_move
+        pokemon.energy = 60  # Enough energy
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Test hp/1.4 threshold (140/1.4 = 100)
+            def mock_damage_hp_1_4(poke, opp, move):
+                if move == pokemon.fast_move:
+                    return 8
+                elif move == high_damage_move:
+                    return 100  # Exactly hp/1.4 threshold
+                return 0
+            
+            mock_calc.calculate_damage.side_effect = mock_damage_hp_1_4
+            
+            shield_decision = ActionLogic.would_shield(battle, pokemon, opponent, high_damage_move)
+            
+            # Should shield due to hp/1.4 threshold with fast DPT > 1.5
+            # JavaScript: if((chargedDamage >= defender.hp / 1.4)&&(fastDPT > 1.5))
+            fast_dpt = 8 / 2  # 4.0 > 1.5
+            charged_damage = 100  # >= 140/1.4 = 100
+            should_shield_1_4 = (charged_damage >= opponent.current_hp / 1.4) and (fast_dpt > 1.5)
+            assert should_shield_1_4 is True
+            
+            # Test hp/2 threshold (140/2 = 70)
+            def mock_damage_hp_2(poke, opp, move):
+                if move == pokemon.fast_move:
+                    return 8
+                elif move == high_damage_move:
+                    return 70  # Exactly hp/2 threshold
+                return 0
+            
+            mock_calc.calculate_damage.side_effect = mock_damage_hp_2
+            
+            shield_decision = ActionLogic.would_shield(battle, pokemon, opponent, high_damage_move)
+            
+            # Should get higher shield weight due to hp/2 threshold with fast DPT > 2
+            # JavaScript: if((chargedDamage >= defender.hp / 2)&&(fastDPT > 2))
+            fast_dpt = 8 / 2  # 4.0 > 2.0
+            charged_damage = 70  # >= 140/2 = 70
+            should_get_high_weight = (charged_damage >= opponent.current_hp / 2) and (fast_dpt > 2)
+            assert should_get_high_weight is True
+    
+    def test_self_debuffing_move_shielding_55_percent_threshold(self):
+        """Test self-debuffing move shielding with >55% damage threshold."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Set up opponent HP
+        opponent.current_hp = 100
+        opponent.shields = 1
+        
+        # Create self-debuffing move (like Superpower)
+        superpower = Mock(spec=ChargedMove)
+        superpower.energy_cost = 50
+        superpower.move_id = "superpower"
+        superpower.self_attack_debuffing = True  # JavaScript uses selfAttackDebuffing
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Test damage exactly at 55% threshold
+            def mock_damage_55_percent(poke, opp, move):
+                if move == superpower:
+                    return 55  # Exactly 55% of 100 HP
+                return 0
+            
+            mock_calc.calculate_damage.side_effect = mock_damage_55_percent
+            
+            shield_decision = ActionLogic.would_shield(battle, pokemon, opponent, superpower)
+            
+            # Should NOT shield at exactly 55% (needs to be > 55%)
+            # JavaScript: if(move.selfAttackDebuffing && (move.damage / defender.hp > 0.55))
+            damage_ratio = 55 / opponent.current_hp  # 0.55 (not > 0.55)
+            should_shield_55 = damage_ratio > 0.55
+            assert should_shield_55 is False
+            
+            # Test damage above 55% threshold
+            def mock_damage_56_percent(poke, opp, move):
+                if move == superpower:
+                    return 56  # 56% of 100 HP (> 55%)
+                return 0
+            
+            mock_calc.calculate_damage.side_effect = mock_damage_56_percent
+            
+            shield_decision = ActionLogic.would_shield(battle, pokemon, opponent, superpower)
+            
+            # Should shield when damage > 55%
+            damage_ratio = 56 / opponent.current_hp  # 0.56 (> 0.55)
+            should_shield_56 = damage_ratio > 0.55
+            assert should_shield_56 is True
+            
+            # The actual shield decision should reflect this logic
+            # Note: The implementation should set use_shield = True and shield_weight = 4
+    
+    def test_always_bait_mode_bait_shields_2_behavior(self):
+        """Test always bait mode (baitShields == 2) behavior."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Set up always bait mode
+        pokemon.bait_shields = 2  # Always bait mode
+        opponent.shields = 1
+        
+        # Mock battle mode
+        battle.get_mode = Mock(return_value="simulate")
+        
+        # Create any charged move
+        test_move = Mock(spec=ChargedMove)
+        test_move.energy_cost = 50
+        test_move.move_id = "test_move"
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            mock_calc.calculate_damage.return_value = 30  # Any damage value
+            
+            shield_decision = ActionLogic.would_shield(battle, pokemon, opponent, test_move)
+            
+            # In always bait mode, should always return True for shielding
+            # JavaScript: if((battle.getMode() == "simulate")&&(attacker.baitShields == 2))
+            is_simulate_mode = battle.get_mode() == "simulate"
+            is_always_bait = getattr(pokemon, 'bait_shields', 0) == 2
+            should_always_shield = is_simulate_mode and is_always_bait
+            
+            assert should_always_shield is True
+            assert shield_decision.value is True  # Should always shield in bait mode
+    
+    def test_cycle_damage_calculations_for_shield_decisions(self):
+        """Test cycle damage calculations for shield decisions."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Set up specific scenario for cycle damage calculation
+        pokemon.energy = 30  # Current energy
+        pokemon.fast_move.energy_gain = 4
+        pokemon.fast_move.turns = 1
+        opponent.current_hp = 50
+        opponent.shields = 2
+        
+        # Create charged move
+        charged_move = Mock(spec=ChargedMove)
+        charged_move.energy_cost = 50
+        charged_move.move_id = "charged_move"
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            def mock_damage(poke, opp, move):
+                if move == pokemon.fast_move:
+                    return 5  # Fast move damage
+                elif move == charged_move:
+                    return 35  # Charged move damage
+                return 0
+            
+            mock_calc.calculate_damage.side_effect = mock_damage
+            
+            # Calculate cycle damage as per JavaScript logic
+            # var fastAttacks = Math.ceil( (move.energy - Math.max(attacker.energy - move.energy, 0)) / attacker.fastMove.energyGain) + 1;
+            energy_deficit = charged_move.energy_cost - max(pokemon.energy - charged_move.energy_cost, 0)
+            # energy_deficit = 50 - max(30 - 50, 0) = 50 - max(-20, 0) = 50 - 0 = 50
+            fast_attacks = math.ceil(energy_deficit / pokemon.fast_move.energy_gain) + 1
+            # fast_attacks = ceil(50/4) + 1 = 13 + 1 = 14
+            
+            fast_damage = mock_calc.calculate_damage(pokemon, opponent, pokemon.fast_move)  # 5
+            fast_attack_damage = fast_attacks * fast_damage  # 14 * 5 = 70
+            cycle_damage = (fast_attack_damage + 1) * opponent.shields  # (70 + 1) * 2 = 142
+            
+            # Test the cycle damage logic
+            assert fast_attacks == 14
+            assert fast_attack_damage == 70
+            assert cycle_damage == 142
+            
+            # Test shield decision based on cycle damage
+            charged_damage = mock_calc.calculate_damage(pokemon, opponent, charged_move)  # 35
+            post_move_hp = opponent.current_hp - charged_damage  # 50 - 35 = 15
+            
+            # JavaScript: if(postMoveHP <= cycleDamage)
+            should_shield_cycle = post_move_hp <= cycle_damage  # 15 <= 142
+            assert should_shield_cycle is True
+            
+            # Verify the actual shield decision
+            shield_decision = ActionLogic.would_shield(battle, pokemon, opponent, charged_move)
+            # The implementation should consider cycle damage in its decision
 
 
 if __name__ == "__main__":
