@@ -584,6 +584,11 @@ class ActionLogic:
                 poke, opponent, final_state.moves, active_charged_moves, battle
             )
             
+            # Handle case where baiting logic returns None
+            if selected_move is None:
+                ActionLogic._log_decision(battle, poke, " baiting logic returned None, using fast move")
+                return None
+            
             # Find the index of the selected move in active charged moves
             move_index = 0
             for i, move in enumerate(active_charged_moves):
