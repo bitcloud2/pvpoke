@@ -66,6 +66,9 @@ class Battle:
         # Debug mode for detailed logging
         self.debug_mode = False
         
+        # Queued actions for move timing optimization (Step 2C)
+        self.queued_actions = []
+        
     def set_buff_chance_modifier(self, value: int):
         """
         Set buff chance modifier.
@@ -320,3 +323,35 @@ class Battle:
         for pokemon in self.pokemon:
             if pokemon:
                 pokemon.reset()
+    
+    def get_queued_actions(self) -> List:
+        """
+        Return list of actions queued by all Pokemon.
+        Used for move timing optimization.
+        
+        Returns:
+            List of TimelineAction objects
+        """
+        return self.queued_actions
+    
+    def log_decision(self, pokemon: Pokemon, message: str) -> None:
+        """
+        Log AI decision for debugging.
+        
+        Args:
+            pokemon: Pokemon making the decision
+            message: Debug message to log
+        """
+        if not self.debug_mode:
+            return
+        
+        print(f"Turn {self.current_turn}: {pokemon.species_id} {message}")
+    
+    def get_mode(self) -> str:
+        """
+        Get battle mode for AI decisions.
+        
+        Returns:
+            Battle mode string ("simulate" or "emulate")
+        """
+        return "simulate"  # Default mode for now

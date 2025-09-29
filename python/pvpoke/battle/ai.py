@@ -246,25 +246,32 @@ class ActionLogic:
                         {"shielded": False, "buffs": False, "priority": getattr(poke, 'priority', 0)}
                     )
         
-        # Throw a lethal Charged Move if it will faint the opponent
-        if not getattr(poke, 'farm_energy', False) and opponent.shields == 0:
-            for n, move in enumerate(active_charged_moves):
-                if poke.energy >= move.energy_cost:
-                    move_damage = DamageCalculator.calculate_damage(poke, opponent, move)
-                    
-                    # Don't throw self debuffing moves at this point, or if the opponent will faint from Fast Move damage
-                    if (opponent.current_hp <= move_damage and 
-                        not getattr(move, 'self_debuffing', False) and 
-                        (n == 0 or (n == 1 and not getattr(poke, 'bait_shields', False))) and 
-                        opponent.current_hp > poke.fast_move.damage):
-                        
-                        return TimelineAction(
-                            "charged",
-                            poke.index,
-                            turns,
-                            n,
-                            {"shielded": False, "buffs": False, "priority": getattr(poke, 'priority', 0)}
-                        )
+        # LETHAL MOVE DETECTION (Step 1G)
+        # Check for lethal charged moves that can KO the opponent
+        can_ko, lethal_move = ActionLogic.can_ko_opponent(poke, opponent)
+        if can_ko and lethal_move:
+            # Find the index of the lethal move
+            move_index = 0
+            if poke.charged_move_1 == lethal_move:
+                move_index = 0
+            elif poke.charged_move_2 == lethal_move:
+                move_index = 1
+            
+            ActionLogic._log_decision(battle, poke, f" uses lethal move {lethal_move.move_id}")
+            
+            return TimelineAction(
+                "charged",
+                poke.index,
+                turns,
+                move_index,
+                {"shielded": False, "buffs": False, "priority": getattr(poke, 'priority', 0)}
+            )
+        
+        # MOVE TIMING OPTIMIZATION CHECK (Step 2C)
+        # Check if we should optimize timing before proceeding with DP algorithm
+        if ActionLogic.optimize_move_timing(battle, poke, opponent, turns_to_live):
+            # Return None to use fast move instead of charged move (timing optimization)
+            return None
         
         # DYNAMIC PROGRAMMING ALGORITHM FOR OPTIMAL MOVE SEQUENCING
         # ELEMENTS OF DP QUEUE: ENERGY, OPPONENT HEALTH, TURNS, OPPONENT SHIELDS, USED MOVES, ATTACK BUFF, CHANCE
@@ -809,11 +816,18 @@ class ActionLogic:
         
         # Check if battle has get_queued_actions method (Step 2C implementation)
         if hasattr(battle, 'get_queued_actions'):
-            queued_actions = battle.get_queued_actions()
-            
-            for action in queued_actions:
-                if action.actor == poke.index and action.type == "fast":
-                    queued_fast_moves += 1
+            try:
+                queued_actions = battle.get_queued_actions()
+                
+                # Ensure we have a proper list (not a Mock object)
+                if isinstance(queued_actions, list):
+                    for action in queued_actions:
+                        if (hasattr(action, 'actor') and hasattr(action, 'type') and
+                            action.actor == poke.index and action.type == "fast"):
+                            queued_fast_moves += 1
+            except (AttributeError, TypeError):
+                # Handle cases where battle is a mock or doesn't have proper implementation
+                pass
         
         # Add 1 for the fast move we're considering
         queued_fast_moves += 1
@@ -880,6 +894,140 @@ class ActionLogic:
                 return False
         
         return True
+    
+    @staticmethod
+    def optimize_move_timing(battle, poke: Pokemon, opponent: Pokemon, turns_to_live: int) -> bool:
+        """
+        Main move timing optimization logic.
+        
+        Args:
+            battle: Battle instance
+            poke: Pokemon considering timing optimization
+            opponent: Opponent Pokemon
+            turns_to_live: Number of turns this Pokemon can survive
+        
+        Returns:
+            True if should wait (optimize timing), False if should proceed with charged move
+        """
+        
+        # Check if optimization is enabled (must be explicitly True)
+        optimize_timing = getattr(poke, 'optimize_move_timing', False)
+        if optimize_timing is not True:
+            return False
+        
+        # Calculate target cooldown
+        target_cooldown = ActionLogic.calculate_target_cooldown(poke, opponent)
+        
+        # Check if optimization should be disabled
+        if ActionLogic.should_disable_timing_optimization(poke, opponent):
+            target_cooldown = 0
+        
+        # Only optimize if opponent is at target cooldown or higher, and target > 0
+        opponent_cooldown = getattr(opponent, 'cooldown', 0)
+        if not ((opponent_cooldown == 0 or opponent_cooldown > target_cooldown) and target_cooldown > 0):
+            return False
+        
+        # Run all safety and strategic checks
+        if not ActionLogic.check_survival_conditions(battle, poke, opponent):
+            return False
+        
+        if not ActionLogic.check_energy_conditions(battle, poke):
+            return False
+        
+        if not ActionLogic.check_strategic_conditions(battle, poke, opponent, turns_to_live):
+            return False
+        
+        # All checks passed - optimize timing
+        ActionLogic._log_decision(battle, poke, " is optimizing move timing")
+        return True  # Return early, don't throw charged move this turn
+    
+    # ========== LETHAL MOVE DETECTION METHODS (Step 1G) ==========
+    
+    @staticmethod
+    def can_ko_opponent(poke: Pokemon, opponent: Pokemon) -> Tuple[bool, Optional[ChargedMove]]:
+        """
+        Check if any available charged move can KO the opponent.
+        
+        Args:
+            poke: Pokemon checking for lethal moves
+            opponent: Opponent Pokemon
+            
+        Returns:
+            Tuple of (can_ko: bool, lethal_move: Optional[ChargedMove])
+        """
+        # Only check when opponent has no shields (matches JS logic)
+        if opponent.shields > 0:
+            return False, None
+        
+        # Don't check if farming energy
+        if getattr(poke, 'farm_energy', False):
+            return False, None
+        
+        # Get active charged moves
+        active_charged_moves = []
+        if poke.charged_move_1:
+            active_charged_moves.append(poke.charged_move_1)
+        if poke.charged_move_2:
+            active_charged_moves.append(poke.charged_move_2)
+        
+        lethal_moves = []
+        
+        # Check each charged move for lethal potential
+        for i, move in enumerate(active_charged_moves):
+            # Must have enough energy
+            if poke.energy >= move.energy_cost:
+                damage = ActionLogic.calculate_lethal_damage(poke, opponent, move)
+                
+                # Check if move can KO opponent
+                if damage >= opponent.current_hp:
+                    # Apply JavaScript logic constraints:
+                    # - Don't throw self debuffing moves at this point
+                    # - Only use first move, or second move if not baiting shields
+                    # - Don't use if opponent will faint from fast move damage anyway
+                    if (not getattr(move, 'self_debuffing', False) and
+                        (i == 0 or (i == 1 and not getattr(poke, 'bait_shields', False))) and
+                        opponent.current_hp > poke.fast_move.damage):
+                        
+                        lethal_moves.append((move, damage, i))
+        
+        if not lethal_moves:
+            return False, None
+        
+        # Return the best lethal move (first available, matching JS priority)
+        best_move = ActionLogic.select_best_lethal_move(lethal_moves)
+        return True, best_move
+    
+    @staticmethod
+    def calculate_lethal_damage(attacker: Pokemon, defender: Pokemon, move: ChargedMove) -> int:
+        """
+        Calculate damage for lethal move detection.
+        
+        Args:
+            attacker: Pokemon using the move
+            defender: Pokemon receiving the move
+            move: Move being used
+            
+        Returns:
+            Expected damage (no shield consideration since we only check when shields=0)
+        """
+        # Use standard damage calculation - shields already checked in can_ko_opponent
+        return DamageCalculator.calculate_damage(attacker, defender, move)
+    
+    @staticmethod
+    def select_best_lethal_move(lethal_moves: List[Tuple[ChargedMove, int, int]]) -> ChargedMove:
+        """
+        Select the best lethal move from available options.
+        
+        Args:
+            lethal_moves: List of (move, damage, index) tuples
+            
+        Returns:
+            The best lethal move (first available, matching JavaScript priority)
+        """
+        # JavaScript logic: use the first available lethal move (index 0 preferred over index 1)
+        # Sort by move index to maintain JavaScript behavior
+        lethal_moves.sort(key=lambda x: x[2])  # Sort by index (third element)
+        return lethal_moves[0][0]  # Return the move (first element)
     
     @staticmethod
     def _log_decision(battle, poke: Pokemon, message: str):

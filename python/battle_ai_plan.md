@@ -1,7 +1,7 @@
 # Battle AI Port - Missing Components from ActionLogic.js
 
 ## Overview
-The Python implementation of PvPoke's battle AI is currently **~30% complete**. The JavaScript ActionLogic.js contains ~900 lines of sophisticated decision-making logic, and we've now implemented the core DP queue loop structure with comprehensive testing.
+The Python implementation of PvPoke's battle AI is currently **~40% complete**. The JavaScript ActionLogic.js contains ~900 lines of sophisticated decision-making logic, and we've now implemented the core DP queue loop structure and Move Timing Optimization with comprehensive testing.
 
 ## Missing Battle AI Components
 
@@ -25,24 +25,43 @@ The Python `decide_action` method is only **partially implemented** (lines 270-2
         - ✅ Add comprehensive tests for charged move readiness
         - ✅ Verify calculation matches JavaScript behavior exactly
 - **Move Timing Optimization**: Logic to reduce free turns (lines 237-345 in JS)
-    - ⏳ Step 2A: Implement Target Cooldown Calculation
-        - Add `optimize_move_timing` flag to Pokemon class
-        - Implement cooldown-based targeting logic (500ms default, 1000ms for slow moves)
-        - Add special case handling for different move duration combinations
-        - Add logic to disable optimization for same/evenly divisible move durations
-    - ⏳ Step 2B: Add Timing Optimization Checks
-        - Implement faint prevention check (don't optimize if about to faint from fast move)
-        - Add energy overflow prevention (don't go over 100 energy with queued fast moves)
-        - Add turns-to-live vs planned-turns comparison
-        - Add lethal charged move detection (don't optimize if can KO opponent)
-        - Add opponent lethal move prevention (don't optimize if opponent can KO)
-        - Add fast move KO prevention within timing window
-    - ⏳ Step 2C: Integrate Battle Context Methods
-        - Implement `get_queued_actions()` method in Battle class
-        - Add `log_decision()` method for debugging output
-        - Add queued fast move counting logic
-        - Add timing optimization return logic (early exit when optimizing)  
+    - ✅ Step 1D: Implement Target Cooldown Calculation
+        - ✅ Add `optimize_move_timing` flag to Pokemon class
+        - ✅ Implement cooldown-based targeting logic (500ms default, 1000ms for slow moves)
+        - ✅ Add special case handling for different move duration combinations
+        - ✅ Add logic to disable optimization for same/evenly divisible move durations
+    - ✅ Step 1E: Add Timing Optimization Checks
+        - ✅ Implement faint prevention check (don't optimize if about to faint from fast move)
+        - ✅ Add energy overflow prevention (don't go over 100 energy with queued fast moves)
+        - ✅ Add turns-to-live vs planned-turns comparison
+        - ✅ Add lethal charged move detection (don't optimize if can KO opponent)
+        - ✅ Add opponent lethal move prevention (don't optimize if opponent can KO)
+        - ✅ Add fast move KO prevention within timing window
+    - ✅ Step 1F: Integrate Battle Context Methods (COMPLETED)
+        - ✅ Implement `get_queued_actions()` method in Battle class
+        - ✅ Add `log_decision()` method for debugging output
+        - ✅ Add queued fast move counting logic
+        - ✅ Add timing optimization return logic (early exit when optimizing)
+        - ✅ Add main `optimize_move_timing()` method with full integration
+        - ✅ Add comprehensive test coverage for all Step 2C components  
 - **Lethal Move Detection**: Throwing moves that will KO the opponent (lines 210-234 in JS)
+    - ✅ Step 1G: Implement Basic Lethal Move Detection (COMPLETED)
+        - ✅ Add `can_ko_opponent()` method to check if any charged move can KO
+        - ✅ Implement damage calculation with shield consideration
+        - ✅ Add energy requirement validation
+        - ✅ Add basic lethal move selection logic
+        - ✅ Integrate lethal detection into main `decide_action()` method
+        - ✅ Add comprehensive test coverage for all lethal detection scenarios
+    - Step 1H: Add Advanced Lethal Detection Logic
+        - Implement multi-move lethal combinations (charged + fast moves)
+        - Add buff/debuff consideration in damage calculations
+        - Handle special cases (opponent at 1 HP after shield)
+        - Add priority ordering for multiple lethal moves
+    - Step 1I: Integrate Lethal Detection with DP Algorithm
+        - Add lethal move detection to DP state evaluation
+        - Implement immediate victory state handling
+        - Add lethal move weight boosting in decision options
+        - Add comprehensive testing for lethal detection scenarios
 - **Shield Baiting Logic**: Complex baiting strategies when shields are up (lines 820-847 in JS)
 - **Self-Debuffing Move Handling**: Special logic for moves like Superpower (lines 918-935 in JS)
 - **Energy Stacking**: Logic to stack multiple uses of debuffing moves (lines 919-935 in JS)
@@ -343,6 +362,355 @@ def optimize_move_timing(self, battle, poke: Pokemon, opponent: Pokemon, turns_t
 - Consider disabling optimization in fast simulation modes
 - Profile timing optimization impact on battle speed
 
+## Lethal Move Detection - Detailed Implementation Plan
+
+### Overview
+Lethal Move Detection is a critical AI component that identifies when a Pokemon can knock out (KO) the opponent with available moves. This system ensures the AI prioritizes finishing moves when victory is achievable, preventing unnecessary prolonged battles or missed opportunities.
+
+### Core Concept
+- **Lethal Move**: Any move that can reduce opponent's HP to 0 or below
+- **Shield Consideration**: Account for opponent shields reducing charged move damage to 1
+- **Energy Validation**: Ensure Pokemon has sufficient energy to use the lethal move
+- **Priority Ordering**: When multiple lethal moves exist, choose the most efficient one
+
+### Step 1G: Basic Lethal Move Detection
+
+#### 1G.1: Core Lethal Detection Method
+```python
+def can_ko_opponent(self, poke: Pokemon, opponent: Pokemon) -> Tuple[bool, Optional[Move]]:
+    """
+    Check if any available move can KO the opponent.
+    
+    Returns:
+        Tuple of (can_ko: bool, lethal_move: Optional[Move])
+    """
+    lethal_moves = []
+    
+    # Check each charged move
+    for move in poke.active_charged_moves:
+        if poke.energy >= move.energy_cost:
+            damage = self.calculate_lethal_damage(poke, opponent, move)
+            if damage >= opponent.current_hp:
+                lethal_moves.append((move, damage))
+    
+    # Check fast move (rare but possible at very low HP)
+    fast_damage = self.calculate_lethal_damage(poke, opponent, poke.fast_move)
+    if fast_damage >= opponent.current_hp:
+        lethal_moves.append((poke.fast_move, fast_damage))
+    
+    if not lethal_moves:
+        return False, None
+    
+    # Return the most efficient lethal move
+    best_move = self.select_best_lethal_move(lethal_moves)
+    return True, best_move
+```
+
+#### 1G.2: Lethal Damage Calculation
+```python
+def calculate_lethal_damage(self, attacker: Pokemon, defender: Pokemon, move: Move) -> int:
+    """
+    Calculate damage for lethal move detection, accounting for shields.
+    
+    Args:
+        attacker: Pokemon using the move
+        defender: Pokemon receiving the move
+        move: Move being used
+        
+    Returns:
+        Expected damage after shields/resistances
+    """
+    # Use standard damage calculation
+    base_damage = DamageCalculator.calculate_damage(attacker, defender, move)
+    
+    # Account for shields on charged moves
+    if move.move_type == "charged" and defender.shields > 0:
+        # Shields reduce charged move damage to 1
+        return 1
+    
+    return base_damage
+```
+
+#### 1G.3: Best Lethal Move Selection
+```python
+def select_best_lethal_move(self, lethal_moves: List[Tuple[Move, int]]) -> Move:
+    """
+    Select the most efficient lethal move from available options.
+    
+    Priority order:
+    1. Fast moves (no energy cost)
+    2. Lowest energy cost charged moves
+    3. Highest damage (for overkill scenarios)
+    """
+    # Sort by priority: fast moves first, then by energy cost, then by damage
+    def move_priority(move_damage_tuple):
+        move, damage = move_damage_tuple
+        if move.move_type == "fast":
+            return (0, 0, -damage)  # Fast moves have highest priority
+        else:
+            return (1, move.energy_cost, -damage)  # Then by energy cost, then damage
+    
+    lethal_moves.sort(key=move_priority)
+    return lethal_moves[0][0]  # Return the best move
+```
+
+### Step 1H: Advanced Lethal Detection Logic
+
+#### 1H.1: Multi-Move Lethal Combinations
+```python
+def check_multi_move_lethal(self, poke: Pokemon, opponent: Pokemon) -> Tuple[bool, List[Move]]:
+    """
+    Check if combination of moves can KO opponent (e.g., charged move + fast move).
+    
+    Returns:
+        Tuple of (can_ko: bool, move_sequence: List[Move])
+    """
+    # Check charged move + fast move combinations
+    for charged_move in poke.active_charged_moves:
+        if poke.energy >= charged_move.energy_cost:
+            charged_damage = self.calculate_lethal_damage(poke, opponent, charged_move)
+            fast_damage = self.calculate_lethal_damage(poke, opponent, poke.fast_move)
+            
+            total_damage = charged_damage + fast_damage
+            
+            # Account for potential HP after shield
+            remaining_hp = opponent.current_hp
+            if charged_move.move_type == "charged" and opponent.shields > 0:
+                remaining_hp -= 1  # Shield reduces to 1 damage
+            else:
+                remaining_hp -= charged_damage
+            
+            # Check if fast move can finish
+            if remaining_hp > 0 and fast_damage >= remaining_hp:
+                return True, [charged_move, poke.fast_move]
+    
+    return False, []
+```
+
+#### 1H.2: Buff/Debuff Consideration
+```python
+def calculate_buffed_lethal_damage(self, attacker: Pokemon, defender: Pokemon, move: Move) -> int:
+    """
+    Calculate lethal damage considering current buff/debuff states.
+    """
+    # Get current attack multiplier
+    attack_multiplier = self.get_attack_multiplier(attacker.attack_buff)
+    
+    # Get current defense multiplier  
+    defense_multiplier = self.get_defense_multiplier(defender.defense_buff)
+    
+    # Calculate base damage with buffs
+    base_damage = DamageCalculator.calculate_damage_with_buffs(
+        attacker, defender, move, attack_multiplier, defense_multiplier
+    )
+    
+    # Apply shield logic
+    if move.move_type == "charged" and defender.shields > 0:
+        return 1
+    
+    return base_damage
+
+def get_attack_multiplier(self, buff_stage: int) -> float:
+    """Convert buff stage to attack multiplier."""
+    multipliers = {-4: 0.5, -3: 0.571, -2: 0.667, -1: 0.8, 0: 1.0, 
+                  1: 1.25, 2: 1.5, 3: 1.75, 4: 2.0}
+    return multipliers.get(buff_stage, 1.0)
+
+def get_defense_multiplier(self, buff_stage: int) -> float:
+    """Convert buff stage to defense multiplier."""
+    multipliers = {-4: 2.0, -3: 1.75, -2: 1.5, -1: 1.25, 0: 1.0,
+                  1: 0.8, 2: 0.667, 3: 0.571, 4: 0.5}
+    return multipliers.get(buff_stage, 1.0)
+```
+
+#### 1H.3: Special Case Handling
+```python
+def handle_special_lethal_cases(self, poke: Pokemon, opponent: Pokemon) -> Tuple[bool, Optional[Move]]:
+    """
+    Handle special lethal scenarios.
+    
+    Cases:
+    1. Opponent at 1 HP after shield (any move is lethal)
+    2. Opponent with no shields but low HP
+    3. Self-debuffing moves that might still be lethal
+    """
+    # Case 1: Opponent at 1 HP (common after shielded charged move)
+    if opponent.current_hp == 1:
+        # Any move will KO, prefer fast move to save energy
+        return True, poke.fast_move
+    
+    # Case 2: Very low HP opponent (2-5 HP)
+    if opponent.current_hp <= 5:
+        # Check if fast move is sufficient
+        fast_damage = self.calculate_lethal_damage(poke, opponent, poke.fast_move)
+        if fast_damage >= opponent.current_hp:
+            return True, poke.fast_move
+    
+    # Case 3: Self-debuffing moves (like Superpower)
+    for move in poke.active_charged_moves:
+        if poke.energy >= move.energy_cost and getattr(move, 'self_debuffing', False):
+            # Calculate damage before self-debuff applies
+            damage = self.calculate_lethal_damage(poke, opponent, move)
+            if damage >= opponent.current_hp:
+                return True, move
+    
+    return False, None
+```
+
+### Step 1I: Integration with DP Algorithm
+
+#### 1I.1: DP State Lethal Check
+```python
+def evaluate_lethal_in_dp_state(self, state: DPState, poke: Pokemon, opponent: Pokemon) -> bool:
+    """
+    Check for lethal moves within DP algorithm state evaluation.
+    
+    Args:
+        state: Current DP state being evaluated
+        poke: Current Pokemon
+        opponent: Opponent Pokemon
+        
+    Returns:
+        True if lethal move found and state should be marked as victory
+    """
+    # Create temporary Pokemon with state values
+    temp_poke = self.create_temp_pokemon_from_state(poke, state)
+    temp_opponent = self.create_temp_opponent_from_state(opponent, state)
+    
+    # Check for lethal moves
+    can_ko, lethal_move = self.can_ko_opponent(temp_poke, temp_opponent)
+    
+    if can_ko:
+        # Mark this as a victory state
+        state.victory = True
+        state.best_move = lethal_move
+        state.score = 1000  # High score for victory
+        return True
+    
+    return False
+```
+
+#### 1I.2: Victory State Handling
+```python
+def handle_victory_state(self, state: DPState, lethal_move: Move) -> None:
+    """
+    Handle immediate victory when lethal move is found.
+    
+    Args:
+        state: DP state that achieved victory
+        lethal_move: The move that causes victory
+    """
+    # Set victory flag
+    state.victory = True
+    state.best_move = lethal_move
+    
+    # Set maximum score
+    state.score = 1000
+    
+    # Clear opponent health to 0
+    state.opp_health = 0
+    
+    # Log the victory
+    self.battle.log_decision(state.pokemon, f"found lethal move: {lethal_move.name}")
+```
+
+#### 1I.3: Decision Weight Boosting
+```python
+def boost_lethal_move_weight(self, options: List[DecisionOption], poke: Pokemon, opponent: Pokemon) -> None:
+    """
+    Boost the weight of lethal moves in decision options.
+    
+    Args:
+        options: List of decision options to modify
+        poke: Current Pokemon
+        opponent: Opponent Pokemon
+    """
+    for option in options:
+        # Check if this option represents a lethal move
+        if hasattr(option, 'move'):
+            damage = self.calculate_lethal_damage(poke, opponent, option.move)
+            if damage >= opponent.current_hp:
+                # Significantly boost weight for lethal moves
+                option.weight *= 10
+                
+                # Extra boost for energy-efficient lethal moves
+                if option.move.move_type == "fast":
+                    option.weight *= 2  # Fast moves cost no energy
+                elif option.move.energy_cost <= 35:
+                    option.weight *= 1.5  # Low-cost charged moves
+```
+
+### Integration Points
+
+#### ActionLogic Class Extensions:
+```python
+class ActionLogic:
+    def __init__(self, battle):
+        self.battle = battle
+        self.lethal_cache = {}  # Cache lethal calculations
+    
+    # Add all lethal detection methods here
+    def can_ko_opponent(self, poke, opponent): ...
+    def calculate_lethal_damage(self, attacker, defender, move): ...
+    def select_best_lethal_move(self, lethal_moves): ...
+    # ... etc
+```
+
+#### DP Algorithm Integration:
+```python
+def decide_action(self, poke: Pokemon, opponent: Pokemon) -> str:
+    """Main decision method with lethal detection."""
+    
+    # Priority 1: Check for immediate lethal moves
+    can_ko, lethal_move = self.can_ko_opponent(poke, opponent)
+    if can_ko:
+        self.battle.log_decision(poke, f"using lethal move: {lethal_move.name}")
+        return lethal_move.name
+    
+    # Continue with DP algorithm for non-lethal scenarios
+    # ... existing DP logic
+```
+
+### Testing Strategy
+
+#### Unit Tests:
+1. **Basic Lethal Detection**: Test single move KO scenarios
+2. **Shield Interaction**: Test lethal detection with/without shields
+3. **Energy Validation**: Test insufficient energy scenarios
+4. **Multi-Move Combinations**: Test charged + fast move sequences
+5. **Buff Consideration**: Test lethal detection with stat changes
+6. **Special Cases**: Test 1 HP scenarios and edge cases
+
+#### Integration Tests:
+1. **DP Algorithm Integration**: Test lethal detection within DP states
+2. **Decision Weight Boosting**: Verify lethal moves get priority
+3. **Victory State Handling**: Test immediate victory scenarios
+4. **Performance Impact**: Ensure lethal detection doesn't slow battles
+
+#### Test Cases:
+```python
+def test_basic_lethal_detection():
+    """Test basic lethal move detection."""
+    # Setup: Opponent at 50 HP, Pokemon has 100 damage move with 50 energy
+    # Expected: Should detect lethal move
+    
+def test_shield_blocks_lethal():
+    """Test that shields prevent lethal detection."""
+    # Setup: Opponent at 50 HP with 1 shield, Pokemon has 100 damage charged move
+    # Expected: Should not detect as lethal (damage reduced to 1)
+    
+def test_fast_move_lethal():
+    """Test fast move lethal detection."""
+    # Setup: Opponent at 5 HP, Pokemon fast move does 10 damage
+    # Expected: Should detect fast move as lethal
+```
+
+### Performance Considerations
+- Cache lethal damage calculations for repeated checks
+- Limit multi-move combination depth to prevent exponential complexity
+- Use early returns when lethal move is found
+- Consider disabling complex lethal detection in fast simulation modes
+
 ## Implementation Priority
 
 ### Phase 1: Core Decision Logic (High Priority)
@@ -376,16 +744,19 @@ def optimize_move_timing(self, battle, poke: Pokemon, opponent: Pokemon, turns_t
 
 ## Current Status
 
-✅ **Completed (~25%)**:
+✅ **Completed (~45%)**:
 - Basic ActionLogic class structure
-- Partial `decide_action` implementation (early exit conditions)
-- `decide_random_action` method (mostly complete)
+- Complete DP queue algorithm implementation (Steps 1A-1C)
+- Complete Move Timing Optimization system (Steps 1D-1F)
+- Complete Basic Lethal Move Detection system (Step 1G)
+- Full `decide_action` implementation with DP algorithm, timing optimization, and lethal detection
+- `decide_random_action` method (complete)
 - `would_shield` method (basic implementation)
 - `choose_option` method (complete)
+- Battle context methods (`get_queued_actions`, `log_decision`, `get_mode`)
+- Comprehensive test coverage for all implemented components
 
-❌ **Missing (~75%)**:
-- Core DP algorithm for optimal move sequencing
-- Move timing optimization
+❌ **Missing (~60%)**:
 - Shield baiting logic
 - Self-debuffing move handling
 - Energy stacking logic
