@@ -527,17 +527,20 @@ class ActionLogic:
         
         # Process final states and choose best move sequence
         if final_state is not None and final_state.moves:
-            # Return the first move in the optimal sequence
-            first_move = final_state.moves[0]
-            move_index = 0
+            # STEP 1J: BASIC SHIELD BAITING LOGIC
+            # Apply shield baiting logic before returning the final move
+            selected_move = ActionLogic._apply_shield_baiting_logic(
+                poke, opponent, final_state.moves, active_charged_moves
+            )
             
-            # Find the index of this move in active charged moves
+            # Find the index of the selected move in active charged moves
+            move_index = 0
             for i, move in enumerate(active_charged_moves):
-                if move == first_move:
+                if move == selected_move:
                     move_index = i
                     break
             
-            ActionLogic._log_decision(battle, poke, f" uses {first_move.move_id} from optimal DP sequence")
+            ActionLogic._log_decision(battle, poke, f" uses {selected_move.move_id} from optimal DP sequence (after baiting logic)")
             
             return TimelineAction(
                 "charged",
@@ -551,17 +554,20 @@ class ActionLogic:
             best_state = max(state_list, key=lambda s: s.chance)
             
             if best_state.moves:
-                # Return the first move in the optimal sequence
-                first_move = best_state.moves[0]
-                move_index = 0
+                # STEP 1J: BASIC SHIELD BAITING LOGIC
+                # Apply shield baiting logic before returning the final move
+                selected_move = ActionLogic._apply_shield_baiting_logic(
+                    poke, opponent, best_state.moves, active_charged_moves
+                )
                 
-                # Find the index of this move in active charged moves
+                # Find the index of the selected move in active charged moves
+                move_index = 0
                 for i, move in enumerate(active_charged_moves):
-                    if move == first_move:
+                    if move == selected_move:
                         move_index = i
                         break
                 
-                ActionLogic._log_decision(battle, poke, f" uses {first_move.move_id} from optimal DP sequence")
+                ActionLogic._log_decision(battle, poke, f" uses {selected_move.move_id} from optimal DP sequence (after baiting logic)")
                 
                 return TimelineAction(
                     "charged",
@@ -1072,6 +1078,70 @@ class ActionLogic:
         # Sort by move index to maintain JavaScript behavior
         lethal_moves.sort(key=lambda x: x[2])  # Sort by index (third element)
         return lethal_moves[0][0]  # Return the move (first element)
+    
+    # ========== SHIELD BAITING LOGIC METHODS (Step 1J) ==========
+    
+    @staticmethod
+    def _apply_shield_baiting_logic(poke: Pokemon, opponent: Pokemon, 
+                                   optimal_moves: List[ChargedMove], 
+                                   active_charged_moves: List[ChargedMove]) -> ChargedMove:
+        """
+        Apply basic shield baiting logic to modify move selection.
+        
+        Based on JavaScript ActionLogic lines 838-847:
+        - Don't bait if the opponent won't shield
+        - Check DPE ratio between moves (must be > 1.5x)
+        - Ensure Pokemon has enough energy for the higher DPE move
+        - Use would_shield prediction to determine if baiting is worthwhile
+        
+        Args:
+            poke: Pokemon making the decision
+            opponent: Opponent Pokemon
+            optimal_moves: Moves from DP algorithm
+            active_charged_moves: All available charged moves
+            
+        Returns:
+            The move to use (either original or baited move)
+        """
+        # Default to the first move from optimal sequence
+        if not optimal_moves:
+            return active_charged_moves[0] if active_charged_moves else None
+            
+        selected_move = optimal_moves[0]
+        
+        # Don't bait if the opponent won't shield, or if we don't have bait_shields enabled
+        if (not getattr(poke, 'bait_shields', False) or 
+            opponent.shields <= 0 or 
+            len(active_charged_moves) <= 1):
+            return selected_move
+        
+        # JavaScript logic: compare activeChargedMoves[1] (higher energy) vs finalState.moves[0] (selected)
+        # Find the higher energy move (typically the second move in active_charged_moves)
+        higher_energy_move = None
+        for move in active_charged_moves:
+            if move != selected_move and move.energy_cost > selected_move.energy_cost:
+                higher_energy_move = move
+                break
+        
+        if higher_energy_move is None:
+            return selected_move
+        
+        # Calculate DPE ratio: (higher_energy_move.dpe) / (selected_move.dpe)
+        if selected_move.dpe <= 0:  # Avoid division by zero
+            return selected_move
+            
+        dpe_ratio = higher_energy_move.dpe / selected_move.dpe
+        
+        # Check if Pokemon has enough energy for the higher energy move and DPE ratio > 1.5
+        if (poke.energy >= higher_energy_move.energy_cost and dpe_ratio > 1.5):
+            # Use would_shield to predict if opponent would shield the higher energy move
+            # If they wouldn't shield it, use the higher energy move instead (no baiting needed)
+            shield_decision = ActionLogic.would_shield(None, poke, opponent, higher_energy_move)
+            if not shield_decision.value:
+                ActionLogic._log_decision(None, poke, f" baiting: switching to {higher_energy_move.move_id} (DPE ratio: {dpe_ratio:.2f})")
+                return higher_energy_move
+        
+        return selected_move
     
     # ========== ADVANCED LETHAL DETECTION METHODS (Step 1H) ==========
     

@@ -64,6 +64,31 @@ The Python `decide_action` method is only **partially implemented** (lines 270-2
         - ✅ Add lethal move weight boosting in decision options
         - ✅ Add comprehensive testing for lethal detection scenarios
 - **Shield Baiting Logic**: Complex baiting strategies when shields are up (lines 820-847 in JS)
+    - ✅ Step 1J: Implement Basic Shield Baiting Logic
+        - ✅ Add `bait_shields` property to Pokemon class
+        - ✅ Implement DPE (Damage Per Energy) calculation for moves
+        - ✅ Add basic shield baiting decision logic
+        - ✅ Integrate with `would_shield` prediction method
+    - ⏳ Step 1K: Add DPE Ratio Analysis
+        - ⏳ Implement DPE ratio comparison between moves
+        - ⏳ Add 1.5x DPE ratio threshold logic
+        - ⏳ Add opponent shield prediction for move selection
+        - ⏳ Add energy requirement validation for bait moves
+    - ⏳ Step 1L: Implement Move Reordering Logic
+        - ⏳ Add move sorting by damage when not baiting
+        - ⏳ Implement low-energy move preference when shields are up
+        - ⏳ Add self-debuffing move avoidance during baiting
+        - ⏳ Add energy-efficient move selection logic
+    - ⏳ Step 1M: Add Advanced Baiting Conditions
+        - ⏳ Implement "build up to expensive move" logic
+        - ⏳ Add self-buffing move exception handling
+        - ⏳ Add low health baiting prevention
+        - ⏳ Add close DPE move handling (within 10 energy)
+    - ⏳ Step 1N: Integrate Shield Baiting with DP Algorithm
+        - ⏳ Add baiting logic to DP state evaluation
+        - ⏳ Implement baiting weight calculation in decision options
+        - ⏳ Add comprehensive testing for all baiting scenarios
+        - ⏳ Validate against JavaScript behavior
 - **Self-Debuffing Move Handling**: Special logic for moves like Superpower (lines 918-935 in JS)
 - **Energy Stacking**: Logic to stack multiple uses of debuffing moves (lines 919-935 in JS)
 - **Aegislash Form Logic**: Special handling for form changes (lines 957-966 in JS)
@@ -711,6 +736,607 @@ def test_fast_move_lethal():
 - Limit multi-move combination depth to prevent exponential complexity
 - Use early returns when lethal move is found
 - Consider disabling complex lethal detection in fast simulation modes
+
+## Shield Baiting Logic - Detailed Implementation Plan
+
+### Overview
+Shield Baiting Logic is a sophisticated AI strategy that manipulates opponent shield usage by strategically choosing which charged moves to throw. The system analyzes move efficiency (DPE - Damage Per Energy) and predicts opponent shielding behavior to maximize damage output while conserving shields.
+
+### Core Concept
+- **Shield Baiting**: Using lower-energy, less efficient moves to force opponents to waste shields
+- **DPE (Damage Per Energy)**: The efficiency metric `damage / energy_cost` used to compare moves
+- **Bait Move**: A lower-energy move used to "bait" a shield before throwing a more powerful move
+- **DPE Ratio**: Comparison between moves to determine if baiting is worthwhile (threshold: 1.5x)
+
+### Step 2A: Basic Shield Baiting Logic
+
+#### 2A.1: Pokemon Class Extensions
+```python
+class Pokemon:
+    def __init__(self):
+        # ... existing initialization
+        self.bait_shields = False  # Flag to enable shield baiting behavior
+        self.active_charged_moves = []  # List of available charged moves (sorted by energy cost)
+    
+    def calculate_move_dpe(self, move: Move, opponent: Pokemon) -> float:
+        """
+        Calculate Damage Per Energy for a move against specific opponent.
+        
+        Args:
+            move: The move to calculate DPE for
+            opponent: The target opponent
+            
+        Returns:
+            DPE value (damage / energy_cost)
+        """
+        if move.energy_cost <= 0:
+            return 0.0  # Fast moves have no energy cost
+        
+        damage = DamageCalculator.calculate_damage(self, opponent, move)
+        
+        # Account for buff effects in DPE calculation
+        if hasattr(move, 'buffs') and move.buffs:
+            buff_multiplier = self.calculate_buff_dpe_multiplier(move)
+            damage *= buff_multiplier
+        
+        return damage / move.energy_cost
+    
+    def calculate_buff_dpe_multiplier(self, move: Move) -> float:
+        """Calculate DPE multiplier for moves with buff effects."""
+        if not hasattr(move, 'buffs') or not move.buffs:
+            return 1.0
+        
+        buff_effect = 0
+        
+        # Self-buffing moves (attack buffs)
+        if hasattr(move, 'buff_target') and move.buff_target == "self" and move.buffs[0] > 0:
+            buff_effect = move.buffs[0] * (80 / move.energy_cost)
+        
+        # Opponent debuffing moves (defense debuffs)
+        elif hasattr(move, 'buff_target') and move.buff_target == "opponent" and len(move.buffs) > 1 and move.buffs[1] < 0:
+            buff_effect = abs(move.buffs[1]) * (80 / move.energy_cost)
+        
+        if buff_effect > 0:
+            buff_apply_chance = getattr(move, 'buff_apply_chance', 1.0)
+            buff_divisor = 4.0  # From GameMaster settings
+            multiplier = (buff_divisor + (buff_effect * buff_apply_chance)) / buff_divisor
+            return multiplier
+        
+        return 1.0
+```
+
+#### 2A.2: Basic Shield Baiting Decision
+```python
+def should_bait_shields(self, poke: Pokemon, opponent: Pokemon) -> Tuple[bool, Optional[Move]]:
+    """
+    Determine if Pokemon should bait shields and which move to use.
+    
+    Returns:
+        Tuple of (should_bait: bool, bait_move: Optional[Move])
+    """
+    # Prerequisites for shield baiting
+    if not poke.bait_shields:
+        return False, None
+    
+    if opponent.shields <= 0:
+        return False, None
+    
+    if len(poke.active_charged_moves) < 2:
+        return False, None
+    
+    # Get moves sorted by energy cost (lowest first)
+    moves = sorted(poke.active_charged_moves, key=lambda m: m.energy_cost)
+    low_energy_move = moves[0]
+    high_energy_move = moves[1]
+    
+    # Check if Pokemon has energy for both moves
+    if poke.energy < low_energy_move.energy_cost:
+        return False, None
+    
+    # Calculate DPE for both moves
+    low_dpe = poke.calculate_move_dpe(low_energy_move, opponent)
+    high_dpe = poke.calculate_move_dpe(high_energy_move, opponent)
+    
+    # Basic baiting condition: high energy move must be significantly more efficient
+    if high_dpe / low_dpe < 1.2:  # Minimum efficiency threshold
+        return False, None
+    
+    # Check if opponent would shield the low energy move
+    shield_decision = self.would_shield(poke, opponent, low_energy_move)
+    if not shield_decision['value']:
+        return False, None  # No point baiting if opponent won't shield
+    
+    # Don't bait with self-debuffing moves
+    if getattr(low_energy_move, 'self_debuffing', False):
+        return False, None
+    
+    return True, low_energy_move
+```
+
+### Step 2B: DPE Ratio Analysis
+
+#### 2B.1: Advanced DPE Ratio Logic
+```python
+def analyze_dpe_ratios(self, poke: Pokemon, opponent: Pokemon, current_move: Move) -> Optional[Move]:
+    """
+    Analyze DPE ratios to determine optimal move selection for baiting.
+    
+    Args:
+        poke: Current Pokemon
+        opponent: Opponent Pokemon  
+        current_move: Currently selected move
+        
+    Returns:
+        Better move if found, None otherwise
+    """
+    if not poke.bait_shields or opponent.shields <= 0 or len(poke.active_charged_moves) < 2:
+        return None
+    
+    # Find the second move (higher energy, potentially higher DPE)
+    second_move = None
+    for move in poke.active_charged_moves:
+        if move != current_move and poke.energy >= move.energy_cost:
+            second_move = move
+            break
+    
+    if not second_move:
+        return None
+    
+    # Calculate DPE ratio
+    current_dpe = poke.calculate_move_dpe(current_move, opponent)
+    second_dpe = poke.calculate_move_dpe(second_move, opponent)
+    
+    if current_dpe <= 0:
+        return None
+    
+    dpe_ratio = second_dpe / current_dpe
+    
+    # JavaScript uses 1.5x threshold for DPE ratio
+    if dpe_ratio > 1.5:
+        # Check if opponent would NOT shield the higher DPE move
+        shield_decision = self.would_shield(poke, opponent, second_move)
+        if not shield_decision['value']:
+            return second_move  # Use the more efficient move if opponent won't shield
+    
+    return None
+```
+
+#### 2B.2: Energy Validation and Move Accessibility
+```python
+def validate_baiting_energy_requirements(self, poke: Pokemon, bait_move: Move, follow_up_move: Move) -> bool:
+    """
+    Validate that Pokemon can execute baiting strategy with available energy.
+    
+    Args:
+        poke: Current Pokemon
+        bait_move: The move to bait with
+        follow_up_move: The follow-up move after baiting
+        
+    Returns:
+        True if energy requirements are met
+    """
+    # Must have energy for bait move immediately
+    if poke.energy < bait_move.energy_cost:
+        return False
+    
+    # Calculate energy after bait move and fast moves needed for follow-up
+    energy_after_bait = poke.energy - bait_move.energy_cost
+    energy_needed_for_followup = follow_up_move.energy_cost - energy_after_bait
+    
+    if energy_needed_for_followup <= 0:
+        return True  # Can immediately use follow-up move
+    
+    # Calculate fast moves needed to reach follow-up energy
+    fast_moves_needed = math.ceil(energy_needed_for_followup / poke.fast_move.energy_gain)
+    
+    # Check if Pokemon can survive the fast moves needed
+    opponent_damage_per_turn = self.estimate_opponent_damage_per_turn(poke, opponent)
+    total_damage_taken = opponent_damage_per_turn * fast_moves_needed
+    
+    return poke.current_hp > total_damage_taken
+```
+
+### Step 2C: Move Reordering Logic
+
+#### 2C.1: Damage-Based Move Sorting
+```python
+def reorder_moves_by_damage(self, poke: Pokemon, opponent: Pokemon, moves: List[Move], baiting: bool) -> List[Move]:
+    """
+    Reorder moves based on damage output and baiting strategy.
+    
+    Args:
+        poke: Current Pokemon
+        opponent: Opponent Pokemon
+        moves: List of available moves
+        baiting: Whether currently baiting shields
+        
+    Returns:
+        Reordered list of moves
+    """
+    if baiting or opponent.shields > 0:
+        # When baiting or shields are up, prefer energy efficiency
+        return sorted(moves, key=lambda m: (m.energy_cost, -poke.calculate_move_dpe(m, opponent)))
+    else:
+        # When not baiting and shields are down, prefer raw damage
+        return sorted(moves, key=lambda m: -DamageCalculator.calculate_damage(poke, opponent, m))
+```
+
+#### 2C.2: Shield-Up Move Preference Logic
+```python
+def select_optimal_move_with_shields_up(self, poke: Pokemon, opponent: Pokemon, current_move: Move) -> Move:
+    """
+    Select optimal move when opponent has shields up.
+    
+    Priority:
+    1. Low energy, high DPE moves
+    2. Non-self-debuffing moves
+    3. Moves that force shield usage
+    """
+    if len(poke.active_charged_moves) < 2:
+        return current_move
+    
+    # Get the lowest energy move
+    lowest_energy_move = min(poke.active_charged_moves, key=lambda m: m.energy_cost)
+    
+    # Check if lowest energy move is better than current selection
+    if (lowest_energy_move.energy_cost <= current_move.energy_cost and
+        poke.calculate_move_dpe(lowest_energy_move, opponent) > poke.calculate_move_dpe(current_move, opponent) and
+        not getattr(lowest_energy_move, 'self_debuffing', False)):
+        
+        return lowest_energy_move
+    
+    return current_move
+```
+
+#### 2C.3: Self-Debuffing Move Avoidance
+```python
+def avoid_self_debuffing_during_baiting(self, poke: Pokemon, opponent: Pokemon, current_move: Move) -> Move:
+    """
+    Avoid using self-debuffing moves when baiting shields.
+    
+    Args:
+        poke: Current Pokemon
+        opponent: Opponent Pokemon
+        current_move: Currently selected move
+        
+    Returns:
+        Alternative move if current move should be avoided
+    """
+    if not poke.bait_shields or opponent.shields <= 0:
+        return current_move
+    
+    if not getattr(current_move, 'self_debuffing', False):
+        return current_move
+    
+    # Find alternative non-debuffing move
+    for move in poke.active_charged_moves:
+        if (move != current_move and 
+            poke.energy >= move.energy_cost and
+            not getattr(move, 'self_debuffing', False) and
+            poke.calculate_move_dpe(move, opponent) > poke.calculate_move_dpe(current_move, opponent)):
+            
+            return move
+    
+    return current_move
+```
+
+### Step 2D: Advanced Baiting Conditions
+
+#### 2D.1: Build-Up to Expensive Move Logic
+```python
+def should_build_up_to_expensive_move(self, poke: Pokemon, opponent: Pokemon) -> Tuple[bool, Optional[Move]]:
+    """
+    Determine if Pokemon should build energy for a more expensive, efficient move.
+    
+    Returns:
+        Tuple of (should_build_up: bool, target_move: Optional[Move])
+    """
+    if not poke.bait_shields or opponent.shields <= 0 or len(poke.active_charged_moves) < 2:
+        return False, None
+    
+    # Sort moves by energy cost
+    moves = sorted(poke.active_charged_moves, key=lambda m: m.energy_cost)
+    cheap_move = moves[0]
+    expensive_move = moves[1]
+    
+    # Check if we don't have energy for expensive move yet
+    if poke.energy >= expensive_move.energy_cost:
+        return False, None
+    
+    # Check if expensive move has significantly better DPE
+    cheap_dpe = poke.calculate_move_dpe(cheap_move, opponent)
+    expensive_dpe = poke.calculate_move_dpe(expensive_move, opponent)
+    
+    if expensive_dpe / cheap_dpe <= 1.3:  # Not worth building up
+        return False, None
+    
+    # Don't build up if we have an effective self-buffing move that's ready
+    if (poke.energy >= cheap_move.energy_cost and 
+        getattr(cheap_move, 'self_buffing', False) and
+        expensive_dpe / cheap_dpe <= 1.5):
+        return False, None
+    
+    return True, expensive_move
+```
+
+#### 2D.2: Self-Buffing Move Exception Handling
+```python
+def handle_self_buffing_move_exceptions(self, poke: Pokemon, opponent: Pokemon, current_move: Move) -> Move:
+    """
+    Handle special cases for self-buffing moves during baiting.
+    
+    Self-buffing moves may be worth using even if they're not the most efficient,
+    due to their long-term damage increase.
+    """
+    if not getattr(current_move, 'self_buffing', False):
+        return current_move
+    
+    # If we have a self-buffing move ready and baiting is enabled
+    if poke.bait_shields and opponent.shields > 0:
+        # Check if there's a significantly better alternative
+        for move in poke.active_charged_moves:
+            if (move != current_move and 
+                poke.energy >= move.energy_cost and
+                not getattr(move, 'self_debuffing', False)):
+                
+                current_dpe = poke.calculate_move_dpe(current_move, opponent)
+                alt_dpe = poke.calculate_move_dpe(move, opponent)
+                
+                # Only switch if alternative is much better (accounting for buff value)
+                if alt_dpe / current_dpe > 2.0:
+                    return move
+    
+    return current_move
+```
+
+#### 2D.3: Low Health Baiting Prevention
+```python
+def should_prevent_baiting_low_health(self, poke: Pokemon, opponent: Pokemon) -> bool:
+    """
+    Determine if baiting should be prevented due to low health.
+    
+    When Pokemon has low health, it's better to use the most efficient move
+    immediately rather than risk fainting while baiting.
+    """
+    health_ratio = poke.current_hp / poke.stats.hp
+    
+    # Prevent baiting if health is below 25% and energy is low
+    if health_ratio < 0.25 and poke.energy < 70:
+        return True
+    
+    # Prevent baiting if Pokemon might faint from opponent's next charged move
+    for move in opponent.active_charged_moves:
+        if opponent.energy >= move.energy_cost:
+            damage = DamageCalculator.calculate_damage(opponent, poke, move)
+            if damage >= poke.current_hp and poke.shields == 0:
+                return True
+    
+    return False
+```
+
+#### 2D.4: Close Energy Move Handling
+```python
+def handle_close_energy_moves(self, poke: Pokemon, opponent: Pokemon, current_move: Move) -> Move:
+    """
+    Handle moves with similar energy costs (within 10 energy).
+    
+    When moves have similar energy costs, prefer the one with better DPE
+    or special properties (buffing vs debuffing).
+    """
+    if len(poke.active_charged_moves) < 2:
+        return current_move
+    
+    for alt_move in poke.active_charged_moves:
+        if alt_move == current_move or poke.energy < alt_move.energy_cost:
+            continue
+        
+        energy_diff = abs(alt_move.energy_cost - current_move.energy_cost)
+        
+        # Handle moves within 10 energy of each other
+        if energy_diff <= 10:
+            current_dpe = poke.calculate_move_dpe(current_move, opponent)
+            alt_dpe = poke.calculate_move_dpe(alt_move, opponent)
+            
+            # Prefer non-debuffing moves when baiting
+            if (poke.bait_shields and opponent.shields > 0 and
+                getattr(current_move, 'self_debuffing', False) and
+                not getattr(alt_move, 'self_debuffing', False) and
+                alt_dpe / current_dpe > 0.7):
+                return alt_move
+            
+            # Prefer buffing moves when not baiting or shields are down
+            if (not poke.bait_shields or opponent.shields == 0):
+                if (getattr(alt_move, 'self_buffing', False) and
+                    not getattr(current_move, 'self_buffing', False)):
+                    return alt_move
+    
+    return current_move
+```
+
+### Step 2E: Integration with DP Algorithm
+
+#### 2E.1: DP State Baiting Evaluation
+```python
+def evaluate_baiting_in_dp_state(self, state: DPState, poke: Pokemon, opponent: Pokemon) -> None:
+    """
+    Evaluate shield baiting options within DP algorithm state.
+    
+    Args:
+        state: Current DP state being evaluated
+        poke: Current Pokemon
+        opponent: Opponent Pokemon
+    """
+    if not poke.bait_shields or opponent.shields <= 0:
+        return
+    
+    # Create temporary Pokemon with state values
+    temp_poke = self.create_temp_pokemon_from_state(poke, state)
+    temp_opponent = self.create_temp_opponent_from_state(opponent, state)
+    
+    # Evaluate baiting options
+    should_bait, bait_move = self.should_bait_shields(temp_poke, temp_opponent)
+    
+    if should_bait and bait_move:
+        # Calculate expected value of baiting vs not baiting
+        bait_value = self.calculate_baiting_expected_value(temp_poke, temp_opponent, bait_move)
+        
+        # Update state score if baiting is beneficial
+        if bait_value > state.score:
+            state.score = bait_value
+            state.best_move = bait_move
+            state.strategy = "BAIT_SHIELDS"
+```
+
+#### 2E.2: Baiting Weight Calculation
+```python
+def calculate_baiting_weight(self, poke: Pokemon, opponent: Pokemon) -> int:
+    """
+    Calculate decision weight for shield baiting strategy.
+    
+    Returns:
+        Weight value for baiting decision (higher = more likely)
+    """
+    if not poke.bait_shields or opponent.shields <= 0 or len(poke.active_charged_moves) < 2:
+        return 0
+    
+    base_weight = 1
+    
+    # Increase weight based on DPE difference
+    moves = sorted(poke.active_charged_moves, key=lambda m: m.energy_cost)
+    low_dpe = poke.calculate_move_dpe(moves[0], opponent)
+    high_dpe = poke.calculate_move_dpe(moves[1], opponent)
+    
+    if low_dpe > 0:
+        dpe_ratio = high_dpe / low_dpe
+        if dpe_ratio > 1.5:
+            base_weight += int((dpe_ratio - 1.0) * 10)
+    
+    # Increase weight if behind on shields
+    if poke.shields < opponent.shields:
+        base_weight += 2
+    
+    # Decrease weight for very bad matchups
+    damage_ratio = self.calculate_overall_damage_ratio(poke, opponent)
+    if damage_ratio < 0.5:  # Taking much more damage than dealing
+        base_weight = max(1, base_weight // 2)
+    
+    # Decrease weight for low health
+    health_ratio = poke.current_hp / poke.stats.hp
+    if health_ratio < 0.25:
+        base_weight = max(1, base_weight // 3)
+    
+    return base_weight
+
+def calculate_baiting_expected_value(self, poke: Pokemon, opponent: Pokemon, bait_move: Move) -> float:
+    """
+    Calculate expected value of using baiting strategy.
+    
+    Considers:
+    - Probability opponent shields bait move
+    - Damage from follow-up move after shield is wasted
+    - Risk of not getting to use follow-up move
+    """
+    # Simulate baiting scenario
+    shield_prob = self.estimate_shield_probability(poke, opponent, bait_move)
+    
+    if shield_prob < 0.5:
+        return 0.0  # Not worth baiting if opponent likely won't shield
+    
+    # Calculate value of wasted opponent shield
+    follow_up_moves = [m for m in poke.active_charged_moves if m != bait_move and poke.energy >= m.energy_cost]
+    
+    if not follow_up_moves:
+        return 0.0
+    
+    best_follow_up = max(follow_up_moves, key=lambda m: poke.calculate_move_dpe(m, opponent))
+    follow_up_damage = DamageCalculator.calculate_damage(poke, opponent, best_follow_up)
+    
+    # Expected value = probability of successful bait * follow-up damage
+    return shield_prob * follow_up_damage * 0.1  # Scale factor for decision weight
+```
+
+### Integration Points
+
+#### Pokemon Class Extensions Needed:
+```python
+class Pokemon:
+    def __init__(self):
+        # ... existing initialization
+        self.bait_shields = False  # Enable/disable baiting behavior
+        self.active_charged_moves = []  # Sorted list of available charged moves
+    
+    # Add all DPE calculation methods
+    def calculate_move_dpe(self, move, opponent): ...
+    def calculate_buff_dpe_multiplier(self, move): ...
+```
+
+#### Move Class Extensions Needed:
+```python
+class Move:
+    def __init__(self):
+        # ... existing initialization
+        self.dpe = 0.0  # Damage per energy (calculated)
+        self.self_buffing = False  # Move buffs self
+        self.self_debuffing = False  # Move debuffs self
+        self.self_attack_debuffing = False  # Move debuffs own attack
+        self.buff_target = "none"  # "self", "opponent", "both"
+        self.buffs = []  # Stat change values
+        self.buff_apply_chance = 1.0  # Probability of applying buffs
+```
+
+#### ActionLogic Class Extensions:
+```python
+class ActionLogic:
+    def __init__(self, battle):
+        self.battle = battle
+        self.baiting_cache = {}  # Cache baiting calculations
+    
+    # Add all baiting methods
+    def should_bait_shields(self, poke, opponent): ...
+    def analyze_dpe_ratios(self, poke, opponent, current_move): ...
+    def reorder_moves_by_damage(self, poke, opponent, moves, baiting): ...
+    # ... etc
+```
+
+### Testing Strategy
+
+#### Unit Tests:
+1. **DPE Calculation**: Test damage per energy calculations with various moves and buffs
+2. **Basic Baiting Logic**: Test shield baiting decision making
+3. **DPE Ratio Analysis**: Test 1.5x threshold and move selection
+4. **Move Reordering**: Test damage-based vs efficiency-based sorting
+5. **Advanced Conditions**: Test build-up logic, health checks, energy validation
+6. **Self-Debuffing Avoidance**: Test avoidance of debuffing moves during baiting
+
+#### Integration Tests:
+1. **DP Algorithm Integration**: Test baiting within DP state evaluation
+2. **Decision Weight Calculation**: Test baiting weight in decision options
+3. **Real Battle Scenarios**: Test baiting in actual battle simulations
+4. **JavaScript Parity**: Compare baiting decisions with JavaScript implementation
+
+#### Test Cases:
+```python
+def test_basic_shield_baiting():
+    """Test basic shield baiting with DPE difference."""
+    # Setup: Pokemon with 35 energy move (DPE 2.0) and 50 energy move (DPE 3.5)
+    # Expected: Should bait with 35 energy move when opponent has shields
+    
+def test_dpe_ratio_threshold():
+    """Test 1.5x DPE ratio threshold for baiting."""
+    # Setup: Moves with DPE ratio of 1.4 (below threshold)
+    # Expected: Should not bait due to insufficient DPE advantage
+    
+def test_self_debuffing_avoidance():
+    """Test avoidance of self-debuffing moves during baiting."""
+    # Setup: Self-debuffing move vs normal move, opponent has shields
+    # Expected: Should prefer non-debuffing move for baiting
+```
+
+### Performance Considerations
+- Cache DPE calculations for repeated move evaluations
+- Limit baiting analysis depth to prevent performance impact
+- Use early returns when baiting conditions aren't met
+- Consider disabling complex baiting logic in fast simulation modes
 
 ## Implementation Priority
 

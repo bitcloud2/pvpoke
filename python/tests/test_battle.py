@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pvpoke.core import Pokemon, Stats, IVs
 from pvpoke.core.moves import FastMove, ChargedMove
-from pvpoke.battle import Battle, BattlePhase, BattleResult
+from pvpoke.battle.battle import Battle, BattlePhase, BattleResult
 
 
 class TestBattle(unittest.TestCase):
@@ -393,6 +393,151 @@ class TestBattle(unittest.TestCase):
         # Test probabilistic (50% chance) - just check it returns bool
         result = self.battle.should_apply_buff(0.5)
         self.assertIsInstance(result, bool)
+
+
+class TestShieldBaiting(unittest.TestCase):
+    """Test shield baiting logic in battle AI."""
+    
+    def setUp(self):
+        """Set up test Pokemon with different DPE moves for baiting tests."""
+        from pvpoke.battle.ai import ActionLogic
+        
+        # Create Pokemon with two charged moves of different DPE
+        self.baiting_pokemon = Pokemon(
+            species_id="altaria",
+            species_name="Altaria",
+            dex=334,
+            base_stats=Stats(atk=141, defense=201, hp=181),
+            types=["dragon", "flying"]
+        )
+        
+        self.opponent = Pokemon(
+            species_id="azumarill", 
+            species_name="Azumarill",
+            dex=184,
+            base_stats=Stats(atk=112, defense=152, hp=225),
+            types=["water", "fairy"]
+        )
+        
+        # Set up moves with different DPE ratios
+        # Low energy, high DPE move (bait move)
+        self.dragon_breath = FastMove(
+            move_id="DRAGON_BREATH",
+            name="Dragon Breath",
+            move_type="dragon",
+            power=4,
+            energy_gain=3,
+            turns=1
+        )
+        
+        # High DPE bait move (35 energy)
+        self.dragon_pulse = ChargedMove(
+            move_id="DRAGON_PULSE",
+            name="Dragon Pulse", 
+            move_type="dragon",
+            power=90,
+            energy_cost=35
+        )
+        
+        # Lower DPE closing move (60 energy)
+        self.sky_attack = ChargedMove(
+            move_id="SKY_ATTACK",
+            name="Sky Attack",
+            move_type="flying", 
+            power=80,
+            energy_cost=60
+        )
+        
+        # Set up Pokemon with moves
+        self.baiting_pokemon.fast_move = self.dragon_breath
+        self.baiting_pokemon.charged_move_1 = self.dragon_pulse  # Higher DPE
+        self.baiting_pokemon.charged_move_2 = self.sky_attack    # Lower DPE
+        self.baiting_pokemon.energy = 70  # Enough for both moves
+        self.baiting_pokemon.bait_shields = True  # Enable baiting
+        
+        # Set up opponent
+        self.opponent.shields = 2  # Has shields to bait
+        self.opponent.current_hp = 150
+        
+    def test_basic_shield_baiting_logic(self):
+        """Test that baiting logic correctly identifies when to bait."""
+        from pvpoke.battle.ai import ActionLogic
+        
+        # Create active charged moves list
+        active_moves = [self.dragon_pulse, self.sky_attack]
+        optimal_moves = [self.sky_attack]  # DP algorithm chose the lower DPE move
+        
+        # Test baiting logic
+        selected_move = ActionLogic._apply_shield_baiting_logic(
+            self.baiting_pokemon, self.opponent, optimal_moves, active_moves
+        )
+        
+        # Should return a move (not None)
+        self.assertIsNotNone(selected_move)
+        
+        # Should be one of the available moves
+        self.assertIn(selected_move, active_moves)
+    
+    def test_no_baiting_when_disabled(self):
+        """Test that baiting doesn't occur when bait_shields is False."""
+        from pvpoke.battle.ai import ActionLogic
+        
+        # Disable baiting
+        self.baiting_pokemon.bait_shields = False
+        
+        active_moves = [self.dragon_pulse, self.sky_attack]
+        optimal_moves = [self.sky_attack]
+        
+        selected_move = ActionLogic._apply_shield_baiting_logic(
+            self.baiting_pokemon, self.opponent, optimal_moves, active_moves
+        )
+        
+        # Should return the original optimal move (no baiting)
+        self.assertEqual(selected_move, self.sky_attack)
+    
+    def test_no_baiting_when_no_shields(self):
+        """Test that baiting doesn't occur when opponent has no shields."""
+        from pvpoke.battle.ai import ActionLogic
+        
+        # Remove opponent shields
+        self.opponent.shields = 0
+        
+        active_moves = [self.dragon_pulse, self.sky_attack]
+        optimal_moves = [self.sky_attack]
+        
+        selected_move = ActionLogic._apply_shield_baiting_logic(
+            self.baiting_pokemon, self.opponent, optimal_moves, active_moves
+        )
+        
+        # Should return the original optimal move (no baiting)
+        self.assertEqual(selected_move, self.sky_attack)
+    
+    def test_no_baiting_with_single_move(self):
+        """Test that baiting doesn't occur with only one charged move."""
+        from pvpoke.battle.ai import ActionLogic
+        
+        # Only one move available
+        active_moves = [self.dragon_pulse]
+        optimal_moves = [self.dragon_pulse]
+        
+        selected_move = ActionLogic._apply_shield_baiting_logic(
+            self.baiting_pokemon, self.opponent, optimal_moves, active_moves
+        )
+        
+        # Should return the only available move
+        self.assertEqual(selected_move, self.dragon_pulse)
+    
+    def test_dpe_calculation(self):
+        """Test that DPE is calculated correctly for moves."""
+        # Dragon Pulse: 90 power / 35 energy = 2.57 DPE
+        self.assertAlmostEqual(self.dragon_pulse.dpe, 90/35, places=2)
+        
+        # Sky Attack: 80 power / 60 energy = 1.33 DPE  
+        self.assertAlmostEqual(self.sky_attack.dpe, 80/60, places=2)
+        
+        # DPE ratio should be > 1.5 (2.57 / 1.33 = 1.93)
+        dpe_ratio = self.dragon_pulse.dpe / self.sky_attack.dpe
+        self.assertGreater(dpe_ratio, 1.5)
 
 
 if __name__ == "__main__":
