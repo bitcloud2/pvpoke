@@ -84,9 +84,11 @@ The Python `decide_action` method is only **partially implemented** (lines 270-2
         - ✅ Add self-buffing move exception handling
         - ✅ Add low health baiting prevention
         - ✅ Add close DPE move handling (within 10 energy)
-    - ⏳ Step 1N: Integrate Shield Baiting with DP Algorithm
-        - ⏳ Add baiting logic to DP state evaluation
-        - ⏳ Implement baiting weight calculation in decision options
+    - ✅ Step 1N: Integrate Shield Baiting with DP Algorithm (COMPLETED)
+        - ✅ Add baiting logic to DP state evaluation
+        - ✅ Implement baiting weight calculation in decision options
+        - ✅ Add energy building logic for expensive moves during DP evaluation
+        - ✅ Add comprehensive testing for integrated baiting logic
         - ⏳ Add comprehensive testing for all baiting scenarios
         - ⏳ Validate against JavaScript behavior
 - **Self-Debuffing Move Handling**: Special logic for moves like Superpower (lines 918-935 in JS)
