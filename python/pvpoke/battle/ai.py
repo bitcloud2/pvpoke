@@ -38,6 +38,7 @@ class DecisionOption:
     """Option for randomized decision making."""
     name: str
     weight: int
+    move: Optional[ChargedMove] = None  # Add move reference for lethal detection
 
 
 @dataclass
@@ -318,6 +319,35 @@ class ActionLogic:
                 final_state = curr_state
                 
                 if curr_state.chance == 1.0:
+                    break
+                else:
+                    continue
+            
+            # STEP 1I: LETHAL DETECTION WITHIN DP ALGORITHM
+            # Check for lethal moves at current state before evaluating charged moves
+            temp_poke = ActionLogic._create_temp_pokemon_from_state(poke, curr_state)
+            temp_opponent = ActionLogic._create_temp_opponent_from_state(opponent, curr_state)
+            
+            can_ko, lethal_move = ActionLogic.can_ko_opponent_advanced(temp_poke, temp_opponent)
+            if can_ko and lethal_move:
+                # Create immediate victory state
+                victory_state = BattleState(
+                    energy=curr_state.energy - lethal_move.energy_cost,
+                    opp_health=0,  # Victory achieved
+                    turn=curr_state.turn + 1,
+                    opp_shields=max(0, curr_state.opp_shields - 1) if curr_state.opp_shields > 0 else 0,
+                    moves=curr_state.moves + [lethal_move],
+                    buffs=curr_state.buffs,
+                    chance=curr_state.chance
+                )
+                
+                state_list.append(victory_state)
+                final_state = victory_state
+                
+                ActionLogic._log_decision(battle, poke, f" found lethal move {lethal_move.move_id} in DP state")
+                
+                # If this is a guaranteed victory (100% chance), break immediately
+                if victory_state.chance == 1.0:
                     break
                 else:
                     continue
@@ -627,9 +657,16 @@ class ActionLogic:
         
         # Build action options
         for i, move_value in enumerate(charged_move_values):
-            action_options.append(DecisionOption(f"CHARGED_MOVE_{move_value['index']}", move_value['weight']))
+            action_options.append(DecisionOption(
+                f"CHARGED_MOVE_{move_value['index']}", 
+                move_value['weight'],
+                move_value['move']  # Include move reference for lethal detection
+            ))
         
-        action_options.append(DecisionOption("FAST_MOVE", fast_move_weight))
+        action_options.append(DecisionOption("FAST_MOVE", fast_move_weight, None))
+        
+        # STEP 1I: BOOST LETHAL MOVE WEIGHTS IN DECISION OPTIONS
+        ActionLogic.boost_lethal_move_weight(action_options, poke, opponent)
         
         action_type = ActionLogic.choose_option(action_options)
         
@@ -1293,6 +1330,89 @@ class ActionLogic:
         
         return score
     
+    @staticmethod
+    def _create_temp_pokemon_from_state(poke: Pokemon, state: BattleState) -> Pokemon:
+        """
+        Create a temporary Pokemon object with state values for lethal detection.
+        
+        Args:
+            poke: Original Pokemon
+            state: Current DP state
+            
+        Returns:
+            Temporary Pokemon with state values
+        """
+        # Create a shallow copy of the Pokemon and update state values
+        import copy
+        temp_poke = copy.copy(poke)
+        
+        # Update with state values
+        temp_poke.energy = state.energy
+        temp_poke.current_hp = poke.current_hp  # HP doesn't change in DP states for attacker
+        
+        # Apply buff state to attack stat (temporary for calculation)
+        if hasattr(temp_poke, 'stat_buffs'):
+            temp_poke.stat_buffs = [state.buffs, temp_poke.stat_buffs[1]]
+        else:
+            temp_poke.stat_buffs = [state.buffs, 0]
+        
+        return temp_poke
+    
+    @staticmethod
+    def _create_temp_opponent_from_state(opponent: Pokemon, state: BattleState) -> Pokemon:
+        """
+        Create a temporary opponent Pokemon object with state values for lethal detection.
+        
+        Args:
+            opponent: Original opponent Pokemon
+            state: Current DP state
+            
+        Returns:
+            Temporary opponent with state values
+        """
+        # Create a shallow copy of the opponent and update state values
+        import copy
+        temp_opponent = copy.copy(opponent)
+        
+        # Update with state values
+        temp_opponent.current_hp = state.opp_health
+        temp_opponent.shields = state.opp_shields
+        # Opponent energy doesn't change in our DP states, so keep original
+        
+        return temp_opponent
+
+    @staticmethod
+    def boost_lethal_move_weight(options: List[DecisionOption], poke: Pokemon, opponent: Pokemon) -> None:
+        """
+        Boost the weight of lethal moves in decision options.
+        
+        Args:
+            options: List of decision options to modify
+            poke: Current Pokemon
+            opponent: Opponent Pokemon
+        """
+        for option in options:
+            # Check if this option represents a lethal move
+            if option.move:
+                # Calculate damage for this move
+                damage = DamageCalculator.calculate_damage(poke, opponent, option.move)
+                
+                # Account for shields
+                if opponent.shields > 0:
+                    damage = 1  # Shields reduce charged move damage to 1
+                
+                if damage >= opponent.current_hp:
+                    # Significantly boost weight for lethal moves
+                    option.weight *= 10
+                    
+                    # Extra boost for energy-efficient lethal moves
+                    if option.move.energy_cost <= 35:
+                        option.weight *= 2  # Low-cost charged moves get extra boost
+                    
+                    # Slight penalty for self-debuffing lethal moves (still prioritized but less so)
+                    if getattr(option.move, 'self_debuffing', False):
+                        option.weight = int(option.weight * 0.8)
+
     @staticmethod
     def can_ko_opponent_advanced(poke: Pokemon, opponent: Pokemon) -> Tuple[bool, Optional[ChargedMove]]:
         """

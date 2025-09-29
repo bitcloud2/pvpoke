@@ -6,7 +6,7 @@ This test verifies that Step 1A (DP queue initialization) matches the JavaScript
 
 import pytest
 from unittest.mock import Mock, patch
-from pvpoke.battle.ai import ActionLogic, BattleState
+from pvpoke.battle.ai import ActionLogic, BattleState, DecisionOption
 from pvpoke.core.pokemon import Pokemon
 from pvpoke.core.moves import FastMove, ChargedMove
 
@@ -428,6 +428,275 @@ class TestStateCreationAndQueuing:
             result = ActionLogic.decide_action(battle, pokemon, opponent)
             # Should return None (fast move) due to farm_energy flag
             assert result is None
+
+
+class TestLethalDetectionDPIntegration:
+    """Test lethal detection integration with DP algorithm (Step 1I)."""
+    
+    def test_lethal_detection_in_dp_state_evaluation(self):
+        """Test that lethal moves are detected during DP state evaluation."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Set up scenario where Pokemon has lethal move available
+        pokemon.energy = 50  # Enough for charged move
+        opponent.current_hp = 20  # Low HP, vulnerable to lethal move
+        opponent.shields = 0  # No shields to block
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Mock charged move to do exactly lethal damage
+            mock_calc.calculate_damage.return_value = 20
+            
+            with patch('pvpoke.battle.ai.ActionLogic.can_ko_opponent_advanced') as mock_lethal:
+                # Mock lethal detection to return True with the charged move
+                mock_lethal.return_value = (True, pokemon.charged_move_1)
+                
+                result = ActionLogic.decide_action(battle, pokemon, opponent)
+                
+                # Should return the lethal charged move
+                assert result is not None
+                assert result.action_type == "charged"
+                assert result.value == 0  # First charged move
+                
+                # Verify lethal detection was called during DP evaluation
+                mock_lethal.assert_called()
+    
+    def test_immediate_victory_state_handling(self):
+        """Test that immediate victory states are handled correctly in DP algorithm."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Set up scenario for immediate victory
+        pokemon.energy = 35  # Enough for first charged move
+        opponent.current_hp = 15  # Low HP
+        opponent.shields = 1  # One shield, but move will still be lethal
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Mock damage to be lethal even through shield
+            mock_calc.calculate_damage.return_value = 20
+            
+            with patch('pvpoke.battle.ai.ActionLogic.can_ko_opponent_advanced') as mock_lethal:
+                # Mock lethal detection to find lethal move
+                mock_lethal.return_value = (True, pokemon.charged_move_1)
+                
+                with patch('pvpoke.battle.ai.ActionLogic._log_decision') as mock_log:
+                    result = ActionLogic.decide_action(battle, pokemon, opponent)
+                    
+                    # Should return lethal move immediately
+                    assert result is not None
+                    assert result.action_type == "charged"
+                    
+                    # Should log the lethal move discovery
+                    mock_log.assert_called()
+                    log_calls = [call for call in mock_log.call_args_list if "lethal" in str(call)]
+                    assert len(log_calls) > 0
+    
+    def test_lethal_move_weight_boosting_in_decision_options(self):
+        """Test that lethal moves get boosted weights in decision options."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Set up scenario where random action method would be used
+        pokemon.energy = 50  # Enough for both moves
+        opponent.current_hp = 25  # Moderate HP
+        opponent.shields = 0  # No shields
+        
+        # Create decision options
+        options = [
+            DecisionOption("CHARGED_MOVE_0", 10, pokemon.charged_move_1),
+            DecisionOption("CHARGED_MOVE_1", 10, pokemon.charged_move_2),
+            DecisionOption("FAST_MOVE", 10, None)
+        ]
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Mock first move to be lethal, second move not lethal
+            def damage_side_effect(poke, opp, move):
+                if move == pokemon.charged_move_1:
+                    return 30  # Lethal damage
+                elif move == pokemon.charged_move_2:
+                    return 15  # Non-lethal damage
+                else:
+                    return 5   # Fast move damage
+            
+            mock_calc.calculate_damage.side_effect = damage_side_effect
+            
+            # Apply lethal weight boosting
+            ActionLogic.boost_lethal_move_weight(options, pokemon, opponent)
+            
+            # First move should have significantly boosted weight
+            assert options[0].weight > 10  # Should be boosted
+            assert options[1].weight == 10  # Should remain unchanged
+            assert options[2].weight == 10  # Should remain unchanged
+            
+            # Lethal move should have highest weight
+            assert options[0].weight > options[1].weight
+            assert options[0].weight > options[2].weight
+    
+    def test_energy_efficient_lethal_move_extra_boost(self):
+        """Test that low-cost lethal moves get extra weight boost."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Create moves with different energy costs
+        low_cost_move = ChargedMove("low_cost", "Low Cost Move", "normal", 50, 30)  # 30 energy (≤35)
+        high_cost_move = ChargedMove("high_cost", "High Cost Move", "normal", 80, 60)  # 60 energy (>35)
+        
+        pokemon.charged_move_1 = low_cost_move
+        pokemon.charged_move_2 = high_cost_move
+        
+        opponent.current_hp = 20
+        opponent.shields = 0
+        
+        options = [
+            DecisionOption("CHARGED_MOVE_0", 10, low_cost_move),
+            DecisionOption("CHARGED_MOVE_1", 10, high_cost_move)
+        ]
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Both moves are lethal
+            mock_calc.calculate_damage.return_value = 25
+            
+            ActionLogic.boost_lethal_move_weight(options, pokemon, opponent)
+            
+            # Low-cost move should have higher weight than high-cost move
+            assert options[0].weight > options[1].weight
+    
+    def test_self_debuffing_lethal_move_penalty(self):
+        """Test that self-debuffing lethal moves get slight penalty but are still prioritized."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Create self-debuffing move (with attack debuff)
+        debuff_move = ChargedMove("superpower", "Superpower", "fighting", 85, 40, 
+                                buffs=[0.8, 0.8])  # Attack and defense debuff
+        normal_move = ChargedMove("normal", "Normal Move", "normal", 85, 40)
+        
+        pokemon.charged_move_1 = debuff_move
+        pokemon.charged_move_2 = normal_move
+        
+        opponent.current_hp = 20
+        opponent.shields = 0
+        
+        options = [
+            DecisionOption("CHARGED_MOVE_0", 10, debuff_move),
+            DecisionOption("CHARGED_MOVE_1", 10, normal_move)
+        ]
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Both moves are lethal
+            mock_calc.calculate_damage.return_value = 25
+            
+            ActionLogic.boost_lethal_move_weight(options, pokemon, opponent)
+            
+            # Both should be boosted (lethal), but normal move should be higher
+            assert options[0].weight > 10  # Debuff move boosted
+            assert options[1].weight > 10  # Normal move boosted
+            assert options[1].weight > options[0].weight  # Normal move higher
+    
+    def test_shield_blocks_lethal_weight_boost(self):
+        """Test that shields prevent lethal weight boosting."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        opponent.current_hp = 20
+        opponent.shields = 1  # Has shield
+        
+        options = [
+            DecisionOption("CHARGED_MOVE_0", 10, pokemon.charged_move_1)
+        ]
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Move would normally be lethal, but shield reduces to 1 damage
+            mock_calc.calculate_damage.return_value = 25
+            
+            ActionLogic.boost_lethal_move_weight(options, pokemon, opponent)
+            
+            # Weight should not be boosted since shield blocks lethality
+            assert options[0].weight == 10  # Should remain unchanged
+    
+    def test_temp_pokemon_creation_from_dp_state(self):
+        """Test creation of temporary Pokemon from DP state for lethal detection."""
+        pokemon = create_test_pokemon()
+        
+        # Create a DP state with specific values
+        state = BattleState(
+            energy=75,
+            opp_health=30,
+            turn=3,
+            opp_shields=1,
+            moves=[],
+            buffs=2,  # +2 attack buff
+            chance=1.0
+        )
+        
+        temp_poke = ActionLogic._create_temp_pokemon_from_state(pokemon, state)
+        
+        # Verify state values are applied
+        assert temp_poke.energy == 75
+        assert temp_poke.current_hp == pokemon.current_hp  # HP unchanged for attacker
+        assert temp_poke.stat_buffs[0] == 2  # Attack buff applied
+        # Verify it's a copy but with updated values
+        assert temp_poke is not pokemon  # Should be a different object
+        assert temp_poke.fast_move == pokemon.fast_move
+        assert temp_poke.charged_move_1 == pokemon.charged_move_1
+    
+    def test_temp_opponent_creation_from_dp_state(self):
+        """Test creation of temporary opponent from DP state for lethal detection."""
+        opponent = create_test_opponent()
+        
+        # Create a DP state with specific values
+        state = BattleState(
+            energy=20,
+            opp_health=15,  # Low opponent health
+            turn=3,
+            opp_shields=0,  # No shields left
+            moves=[],
+            buffs=1,
+            chance=1.0
+        )
+        
+        temp_opponent = ActionLogic._create_temp_opponent_from_state(opponent, state)
+        
+        # Verify state values are applied
+        assert temp_opponent.current_hp == 15  # State health applied
+        assert temp_opponent.shields == 0  # State shields applied
+        assert temp_opponent.energy == opponent.energy  # Original energy preserved
+        # Verify it's a copy but with updated values
+        assert temp_opponent is not opponent  # Should be a different object
+        assert temp_opponent.fast_move == opponent.fast_move
+    
+    def test_dp_algorithm_with_lethal_detection_integration(self):
+        """Integration test for DP algorithm with lethal detection."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = create_test_battle()
+        
+        # Set up scenario where DP algorithm should find lethal sequence
+        pokemon.energy = 40  # Enough for charged move
+        opponent.current_hp = 25  # Moderate HP
+        opponent.shields = 0  # No shields
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Mock damage calculations
+            mock_calc.calculate_damage.return_value = 30  # Lethal damage
+            
+            with patch('pvpoke.battle.ai.ActionLogic._log_decision') as mock_log:
+                result = ActionLogic.decide_action(battle, pokemon, opponent)
+                
+                # Should return a charged move action
+                assert result is not None
+                assert result.action_type == "charged"
+                
+                # Should have logged lethal move detection
+                log_calls = [str(call) for call in mock_log.call_args_list]
+                lethal_logs = [log for log in log_calls if "lethal" in log.lower()]
+                assert len(lethal_logs) > 0
 
 
 if __name__ == "__main__":
