@@ -527,10 +527,10 @@ class ActionLogic:
         
         # Process final states and choose best move sequence
         if final_state is not None and final_state.moves:
-            # STEP 1J: BASIC SHIELD BAITING LOGIC
-            # Apply shield baiting logic before returning the final move
+            # STEP 1J & 1K: SHIELD BAITING LOGIC WITH DPE RATIO ANALYSIS
+            # Apply enhanced shield baiting logic before returning the final move
             selected_move = ActionLogic._apply_shield_baiting_logic(
-                poke, opponent, final_state.moves, active_charged_moves
+                poke, opponent, final_state.moves, active_charged_moves, battle
             )
             
             # Find the index of the selected move in active charged moves
@@ -554,10 +554,10 @@ class ActionLogic:
             best_state = max(state_list, key=lambda s: s.chance)
             
             if best_state.moves:
-                # STEP 1J: BASIC SHIELD BAITING LOGIC
-                # Apply shield baiting logic before returning the final move
+                # STEP 1J & 1K: SHIELD BAITING LOGIC WITH DPE RATIO ANALYSIS
+                # Apply enhanced shield baiting logic before returning the final move
                 selected_move = ActionLogic._apply_shield_baiting_logic(
-                    poke, opponent, best_state.moves, active_charged_moves
+                    poke, opponent, best_state.moves, active_charged_moves, battle
                 )
                 
                 # Find the index of the selected move in active charged moves
@@ -1084,21 +1084,24 @@ class ActionLogic:
     @staticmethod
     def _apply_shield_baiting_logic(poke: Pokemon, opponent: Pokemon, 
                                    optimal_moves: List[ChargedMove], 
-                                   active_charged_moves: List[ChargedMove]) -> ChargedMove:
+                                   active_charged_moves: List[ChargedMove],
+                                   battle = None) -> ChargedMove:
         """
-        Apply basic shield baiting logic to modify move selection.
+        Apply enhanced shield baiting logic with DPE ratio analysis.
         
         Based on JavaScript ActionLogic lines 838-847:
         - Don't bait if the opponent won't shield
         - Check DPE ratio between moves (must be > 1.5x)
         - Ensure Pokemon has enough energy for the higher DPE move
         - Use would_shield prediction to determine if baiting is worthwhile
+        - Enhanced with Step 1K DPE ratio analysis
         
         Args:
             poke: Pokemon making the decision
             opponent: Opponent Pokemon
             optimal_moves: Moves from DP algorithm
             active_charged_moves: All available charged moves
+            battle: Battle instance for enhanced analysis
             
         Returns:
             The move to use (either original or baited move)
@@ -1115,6 +1118,14 @@ class ActionLogic:
             len(active_charged_moves) <= 1):
             return selected_move
         
+        # STEP 1K: Enhanced DPE Ratio Analysis
+        # Try the new DPE analysis first
+        if ActionLogic.should_use_dpe_ratio_analysis(battle, poke, opponent, selected_move):
+            enhanced_move = ActionLogic.analyze_dpe_ratios(battle, poke, opponent, selected_move)
+            if enhanced_move:
+                return enhanced_move
+        
+        # Fallback to original JavaScript logic for compatibility
         # JavaScript logic: compare activeChargedMoves[1] (higher energy) vs finalState.moves[0] (selected)
         # Find the higher energy move (typically the second move in active_charged_moves)
         higher_energy_move = None
@@ -1126,22 +1137,235 @@ class ActionLogic:
         if higher_energy_move is None:
             return selected_move
         
-        # Calculate DPE ratio: (higher_energy_move.dpe) / (selected_move.dpe)
-        if selected_move.dpe <= 0:  # Avoid division by zero
+        # Calculate DPE ratio using enhanced calculation
+        current_dpe = ActionLogic.calculate_move_dpe(poke, opponent, selected_move)
+        higher_dpe = ActionLogic.calculate_move_dpe(poke, opponent, higher_energy_move)
+        
+        if current_dpe <= 0:  # Avoid division by zero
             return selected_move
             
-        dpe_ratio = higher_energy_move.dpe / selected_move.dpe
+        dpe_ratio = higher_dpe / current_dpe
         
         # Check if Pokemon has enough energy for the higher energy move and DPE ratio > 1.5
         if (poke.energy >= higher_energy_move.energy_cost and dpe_ratio > 1.5):
             # Use would_shield to predict if opponent would shield the higher energy move
             # If they wouldn't shield it, use the higher energy move instead (no baiting needed)
-            shield_decision = ActionLogic.would_shield(None, poke, opponent, higher_energy_move)
+            shield_decision = ActionLogic.would_shield(battle, poke, opponent, higher_energy_move)
             if not shield_decision.value:
-                ActionLogic._log_decision(None, poke, f" baiting: switching to {higher_energy_move.move_id} (DPE ratio: {dpe_ratio:.2f})")
+                ActionLogic._log_decision(battle, poke, f" baiting: switching to {higher_energy_move.move_id} (DPE ratio: {dpe_ratio:.2f})")
                 return higher_energy_move
         
         return selected_move
+    
+    # ========== DPE RATIO ANALYSIS METHODS (Step 1K) ==========
+    
+    @staticmethod
+    def get_active_charged_moves(poke: Pokemon) -> List[ChargedMove]:
+        """
+        Get list of active charged moves for a Pokemon.
+        
+        Args:
+            poke: Pokemon to get moves for
+            
+        Returns:
+            List of active charged moves
+        """
+        active_moves = []
+        if poke.charged_move_1:
+            active_moves.append(poke.charged_move_1)
+        if poke.charged_move_2:
+            active_moves.append(poke.charged_move_2)
+        return active_moves
+    
+    @staticmethod
+    def calculate_move_dpe(poke: Pokemon, opponent: Pokemon, move) -> float:
+        """
+        Calculate Damage Per Energy for a move against specific opponent.
+        
+        Args:
+            poke: Pokemon using the move
+            opponent: Target opponent
+            move: The move to calculate DPE for
+            
+        Returns:
+            DPE value (damage / energy_cost)
+        """
+        if not hasattr(move, 'energy_cost') or move.energy_cost <= 0:
+            return 0.0  # Fast moves have no energy cost
+        
+        # Calculate base damage
+        damage = DamageCalculator.calculate_damage(poke, opponent, move)
+        
+        # Account for buff effects in DPE calculation (matching JavaScript logic)
+        # Only apply buff multiplier if move actually has buffs
+        if (hasattr(move, 'buffs') and move.buffs and 
+            hasattr(move, 'buff_target') and move.buff_target in ["self", "opponent"]):
+            buff_multiplier = ActionLogic.calculate_buff_dpe_multiplier(move)
+            damage *= buff_multiplier
+        
+        return damage / move.energy_cost
+    
+    @staticmethod
+    def calculate_buff_dpe_multiplier(move) -> float:
+        """
+        Calculate DPE multiplier for moves with buff effects.
+        
+        Based on JavaScript Pokemon.initializeMove lines 848-864:
+        - Self-buffing moves (attack buffs): buffEffect = buffs[0] * (80 / energy)
+        - Opponent debuffing moves (defense debuffs): buffEffect = abs(buffs[1]) * (80 / energy)
+        - multiplier = (buffDivisor + (buffEffect * buffApplyChance)) / buffDivisor
+        
+        Args:
+            move: Move to calculate buff multiplier for
+            
+        Returns:
+            DPE multiplier (1.0 if no buffs)
+        """
+        if not hasattr(move, 'buffs') or not move.buffs:
+            return 1.0
+        
+        buff_effect = 0
+        
+        # Self-buffing moves (attack buffs) - JavaScript uses > 0 for buff stages
+        if (hasattr(move, 'buff_target') and move.buff_target == "self" and 
+            len(move.buffs) > 0 and move.buffs[0] > 0):
+            buff_effect = move.buffs[0] * (80 / move.energy_cost)
+        
+        # Opponent debuffing moves (defense debuffs) - JavaScript uses < 0 for debuff stages
+        elif (hasattr(move, 'buff_target') and move.buff_target == "opponent" and 
+              len(move.buffs) > 1 and move.buffs[1] < 0):
+            buff_effect = abs(move.buffs[1]) * (80 / move.energy_cost)
+        
+        if buff_effect > 0:
+            buff_apply_chance = getattr(move, 'buff_apply_chance', 1.0)
+            buff_divisor = 4.0  # From GameMaster settings
+            multiplier = (buff_divisor + (buff_effect * buff_apply_chance)) / buff_divisor
+            return multiplier
+        
+        return 1.0
+    
+    @staticmethod
+    def analyze_dpe_ratios(battle, poke: Pokemon, opponent: Pokemon, current_move) -> Optional:
+        """
+        Analyze DPE ratios to determine optimal move selection for baiting.
+        
+        Based on JavaScript ActionLogic lines 840-847:
+        - Calculate DPE ratio between moves
+        - Use 1.5x threshold for DPE advantage
+        - Check opponent shield prediction
+        - Validate energy requirements
+        
+        Args:
+            battle: Current battle instance
+            poke: Current Pokemon
+            opponent: Opponent Pokemon  
+            current_move: Currently selected move
+            
+        Returns:
+            Better move if found, None otherwise
+        """
+        if (not getattr(poke, 'bait_shields', False) or 
+            opponent.shields <= 0):
+            return None
+        
+        active_moves = ActionLogic.get_active_charged_moves(poke)
+        if len(active_moves) < 2:
+            return None
+        
+        # Find the second move (higher energy, potentially higher DPE)
+        second_move = None
+        for move in active_moves:
+            if move != current_move and poke.energy >= move.energy_cost:
+                second_move = move
+                break
+        
+        if not second_move:
+            return None
+        
+        # Calculate DPE ratio using the enhanced DPE calculation
+        current_dpe = ActionLogic.calculate_move_dpe(poke, opponent, current_move)
+        second_dpe = ActionLogic.calculate_move_dpe(poke, opponent, second_move)
+        
+        if current_dpe <= 0:
+            return None
+        
+        dpe_ratio = second_dpe / current_dpe
+        
+        # JavaScript uses 1.5x threshold for DPE ratio
+        if dpe_ratio > 1.5:
+            # Check if opponent would NOT shield the higher DPE move
+            shield_decision = ActionLogic.would_shield(battle, poke, opponent, second_move)
+            if not shield_decision.value:
+                ActionLogic._log_decision(battle, poke, 
+                    f" DPE analysis: switching to {second_move.move_id} (ratio: {dpe_ratio:.2f})")
+                return second_move  # Use the more efficient move if opponent won't shield
+        
+        return None
+    
+    @staticmethod
+    def validate_baiting_energy_requirements(poke: Pokemon, bait_move, follow_up_move) -> bool:
+        """
+        Validate that Pokemon can execute baiting strategy with available energy.
+        
+        Args:
+            poke: Current Pokemon
+            bait_move: The move to bait with
+            follow_up_move: The follow-up move after baiting
+            
+        Returns:
+            True if energy requirements are met
+        """
+        # Must have energy for bait move immediately
+        if poke.energy < bait_move.energy_cost:
+            return False
+        
+        # Calculate energy after bait move and fast moves needed for follow-up
+        energy_after_bait = poke.energy - bait_move.energy_cost
+        energy_needed_for_followup = follow_up_move.energy_cost - energy_after_bait
+        
+        if energy_needed_for_followup <= 0:
+            return True  # Can immediately use follow-up move
+        
+        # Calculate fast moves needed to reach follow-up energy
+        fast_moves_needed = math.ceil(energy_needed_for_followup / poke.fast_move.energy_gain)
+        
+        # For now, assume Pokemon can survive the fast moves needed
+        # More sophisticated survival checking would require battle simulation
+        return fast_moves_needed <= 5  # Reasonable limit
+    
+    @staticmethod
+    def should_use_dpe_ratio_analysis(battle, poke: Pokemon, opponent: Pokemon, current_move) -> bool:
+        """
+        Determine if DPE ratio analysis should be applied.
+        
+        Args:
+            battle: Current battle instance
+            poke: Current Pokemon
+            opponent: Opponent Pokemon
+            current_move: Currently selected move
+            
+        Returns:
+            True if DPE ratio analysis should be used
+        """
+        # Must have baiting enabled
+        if not getattr(poke, 'bait_shields', False):
+            return False
+        
+        # Opponent must have shields
+        if opponent.shields <= 0:
+            return False
+        
+        # Must have multiple charged moves
+        active_moves = ActionLogic.get_active_charged_moves(poke)
+        if len(active_moves) < 2:
+            return False
+        
+        # Must have energy for at least one alternative move
+        for move in active_moves:
+            if move != current_move and poke.energy >= move.energy_cost:
+                return True
+        
+        return False
     
     # ========== ADVANCED LETHAL DETECTION METHODS (Step 1H) ==========
     

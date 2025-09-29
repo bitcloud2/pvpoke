@@ -6,7 +6,7 @@ This test verifies that Step 1A (DP queue initialization) matches the JavaScript
 
 import pytest
 from unittest.mock import Mock, patch
-from pvpoke.battle.ai import ActionLogic, BattleState, DecisionOption
+from pvpoke.battle.ai import ActionLogic, BattleState, DecisionOption, ShieldDecision
 from pvpoke.core.pokemon import Pokemon
 from pvpoke.core.moves import FastMove, ChargedMove
 
@@ -697,6 +697,343 @@ class TestLethalDetectionDPIntegration:
                 log_calls = [str(call) for call in mock_log.call_args_list]
                 lethal_logs = [log for log in log_calls if "lethal" in log.lower()]
                 assert len(lethal_logs) > 0
+
+
+# ========== DPE RATIO ANALYSIS TESTS (Step 1K) ==========
+
+class TestDPERatioAnalysis:
+    """Test DPE ratio analysis functionality for shield baiting."""
+    
+    def test_calculate_move_dpe_basic(self):
+        """Test basic DPE calculation without buffs."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        
+        # Create a test charged move with no buffs
+        move = ChargedMove(
+            move_id="test_move",
+            name="Test Move",
+            move_type="charged",
+            energy_cost=50,
+            power=100
+        )
+        # Explicitly ensure no buffs
+        move.buffs = None
+        move.buff_target = None
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            mock_calc.calculate_damage.return_value = 75  # 75 damage
+            
+            dpe = ActionLogic.calculate_move_dpe(pokemon, opponent, move)
+            
+            # DPE should be damage / energy_cost = 75 / 50 = 1.5
+            assert dpe == 1.5
+    
+    def test_calculate_move_dpe_with_buffs(self):
+        """Test DPE calculation with buff effects."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        
+        # Create a self-buffing move
+        move = ChargedMove(
+            move_id="power_up_punch",
+            name="Power-Up Punch",
+            move_type="charged",
+            energy_cost=40,
+            power=40
+        )
+        move.buffs = [1, 0]  # +1 attack buff
+        move.buff_target = "self"
+        move.buff_apply_chance = 1.0
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            mock_calc.calculate_damage.return_value = 40  # Base damage
+            
+            dpe = ActionLogic.calculate_move_dpe(pokemon, opponent, move)
+            
+            # Should be higher than base DPE due to buff multiplier
+            base_dpe = 40 / 40  # 1.0
+            assert dpe > base_dpe
+    
+    def test_calculate_buff_dpe_multiplier_self_buff(self):
+        """Test buff DPE multiplier for self-buffing moves."""
+        move = ChargedMove(
+            move_id="power_up_punch",
+            name="Power-Up Punch",
+            move_type="charged",
+            energy_cost=40,
+            power=40
+        )
+        move.buffs = [1, 0]  # +1 attack buff
+        move.buff_target = "self"
+        move.buff_apply_chance = 1.0
+        
+        multiplier = ActionLogic.calculate_buff_dpe_multiplier(move)
+        
+        # Based on JavaScript formula: (4 + (1 * 80/40 * 1.0)) / 4 = (4 + 2) / 4 = 1.5
+        expected = (4.0 + (1 * (80 / 40) * 1.0)) / 4.0
+        assert abs(multiplier - expected) < 0.01
+    
+    def test_calculate_buff_dpe_multiplier_opponent_debuff(self):
+        """Test buff DPE multiplier for opponent debuffing moves."""
+        move = ChargedMove(
+            move_id="superpower",
+            name="Superpower",
+            move_type="charged",
+            energy_cost=50,
+            power=85
+        )
+        move.buffs = [0, -1]  # -1 defense debuff to opponent
+        move.buff_target = "opponent"
+        move.buff_apply_chance = 1.0
+        
+        multiplier = ActionLogic.calculate_buff_dpe_multiplier(move)
+        
+        # Based on JavaScript formula: (4 + (1 * 80/50 * 1.0)) / 4 = (4 + 1.6) / 4 = 1.4
+        expected = (4.0 + (1 * (80 / 50) * 1.0)) / 4.0
+        assert abs(multiplier - expected) < 0.01
+    
+    def test_analyze_dpe_ratios_basic(self):
+        """Test basic DPE ratio analysis."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = Mock()
+        
+        # Enable shield baiting
+        pokemon.bait_shields = True
+        opponent.shields = 1
+        
+        # Create two moves with different DPE ratios
+        low_dpe_move = ChargedMove(
+            move_id="low_move",
+            name="Low Move",
+            move_type="charged",
+            energy_cost=35,
+            power=35
+        )
+        
+        high_dpe_move = ChargedMove(
+            move_id="high_move", 
+            name="High Move",
+            move_type="charged",
+            energy_cost=50,
+            power=100
+        )
+        
+        pokemon.charged_move_1 = low_dpe_move
+        pokemon.charged_move_2 = high_dpe_move
+        pokemon.energy = 60  # Enough for both moves
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Mock damage calculations to create 2.0 DPE ratio
+            def mock_damage(poke, opp, move):
+                if move == low_dpe_move:
+                    return 35  # DPE = 35/35 = 1.0
+                elif move == high_dpe_move:
+                    return 100  # DPE = 100/50 = 2.0
+                return 0
+            
+            mock_calc.calculate_damage.side_effect = mock_damage
+            
+            with patch('pvpoke.battle.ai.ActionLogic.would_shield') as mock_shield:
+                # Mock opponent won't shield the high DPE move
+                mock_shield.return_value = ShieldDecision(value=False, shield_weight=0, no_shield_weight=1)
+                
+                result = ActionLogic.analyze_dpe_ratios(battle, pokemon, opponent, low_dpe_move)
+                
+                # Should return the high DPE move since ratio > 1.5 and opponent won't shield
+                assert result == high_dpe_move
+    
+    def test_analyze_dpe_ratios_insufficient_ratio(self):
+        """Test DPE ratio analysis with insufficient ratio."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = Mock()
+        
+        # Enable shield baiting
+        pokemon.bait_shields = True
+        opponent.shields = 1
+        
+        # Create two moves with low DPE ratio
+        move1 = ChargedMove(
+            move_id="move1",
+            name="Move 1",
+            move_type="charged",
+            energy_cost=35,
+            power=35
+        )
+        
+        move2 = ChargedMove(
+            move_id="move2",
+            name="Move 2", 
+            move_type="charged",
+            energy_cost=50,
+            power=60
+        )
+        
+        pokemon.charged_move_1 = move1
+        pokemon.charged_move_2 = move2
+        pokemon.energy = 60
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Mock damage calculations to create 1.2 DPE ratio (below 1.5 threshold)
+            def mock_damage(poke, opp, move):
+                if move == move1:
+                    return 35  # DPE = 35/35 = 1.0
+                elif move == move2:
+                    return 60  # DPE = 60/50 = 1.2
+                return 0
+            
+            mock_calc.calculate_damage.side_effect = mock_damage
+            
+            result = ActionLogic.analyze_dpe_ratios(battle, pokemon, opponent, move1)
+            
+            # Should return None since DPE ratio < 1.5
+            assert result is None
+    
+    def test_analyze_dpe_ratios_opponent_would_shield(self):
+        """Test DPE ratio analysis when opponent would shield."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = Mock()
+        
+        # Enable shield baiting
+        pokemon.bait_shields = True
+        opponent.shields = 1
+        
+        # Create moves with good DPE ratio
+        low_move = ChargedMove(
+            move_id="low_move",
+            name="Low Move",
+            move_type="charged",
+            energy_cost=35,
+            power=35
+        )
+        
+        high_move = ChargedMove(
+            move_id="high_move",
+            name="High Move",
+            move_type="charged", 
+            energy_cost=50,
+            power=100
+        )
+        
+        pokemon.charged_move_1 = low_move
+        pokemon.charged_move_2 = high_move
+        pokemon.energy = 60
+        
+        with patch('pvpoke.battle.ai.DamageCalculator') as mock_calc:
+            # Mock damage calculations for 2.0 DPE ratio
+            def mock_damage(poke, opp, move):
+                if move == low_move:
+                    return 35  # DPE = 1.0
+                elif move == high_move:
+                    return 100  # DPE = 2.0
+                return 0
+            
+            mock_calc.calculate_damage.side_effect = mock_damage
+            
+            with patch('pvpoke.battle.ai.ActionLogic.would_shield') as mock_shield:
+                # Mock opponent WOULD shield the high DPE move
+                mock_shield.return_value = ShieldDecision(value=True, shield_weight=1, no_shield_weight=0)
+                
+                result = ActionLogic.analyze_dpe_ratios(battle, pokemon, opponent, low_move)
+                
+                # Should return None since opponent would shield
+                assert result is None
+    
+    def test_should_use_dpe_ratio_analysis_conditions(self):
+        """Test conditions for using DPE ratio analysis."""
+        pokemon = create_test_pokemon()
+        opponent = create_test_opponent()
+        battle = Mock()
+        
+        move = ChargedMove(
+            move_id="test_move",
+            name="Test Move",
+            move_type="charged",
+            energy_cost=35,
+            power=35
+        )
+        
+        # Test: No baiting enabled
+        pokemon.bait_shields = False
+        opponent.shields = 1
+        pokemon.charged_move_1 = move
+        pokemon.charged_move_2 = move
+        
+        result = ActionLogic.should_use_dpe_ratio_analysis(battle, pokemon, opponent, move)
+        assert result is False
+        
+        # Test: No opponent shields
+        pokemon.bait_shields = True
+        opponent.shields = 0
+        
+        result = ActionLogic.should_use_dpe_ratio_analysis(battle, pokemon, opponent, move)
+        assert result is False
+        
+        # Test: Only one charged move
+        opponent.shields = 1
+        pokemon.charged_move_2 = None
+        
+        result = ActionLogic.should_use_dpe_ratio_analysis(battle, pokemon, opponent, move)
+        assert result is False
+        
+        # Test: Valid conditions
+        move2 = ChargedMove(
+            move_id="move2",
+            name="Move 2",
+            move_type="charged",
+            energy_cost=50,
+            power=75
+        )
+        pokemon.charged_move_2 = move2
+        pokemon.energy = 60  # Enough for alternative move
+        
+        result = ActionLogic.should_use_dpe_ratio_analysis(battle, pokemon, opponent, move)
+        assert result is True
+    
+    def test_validate_baiting_energy_requirements(self):
+        """Test energy requirement validation for baiting."""
+        pokemon = create_test_pokemon()
+        
+        bait_move = ChargedMove(
+            move_id="bait",
+            name="Bait Move",
+            move_type="charged",
+            energy_cost=35,
+            power=35
+        )
+        
+        follow_up_move = ChargedMove(
+            move_id="followup",
+            name="Follow-up Move",
+            move_type="charged",
+            energy_cost=50,
+            power=100
+        )
+        
+        # Test: Insufficient energy for bait move
+        pokemon.energy = 30
+        result = ActionLogic.validate_baiting_energy_requirements(pokemon, bait_move, follow_up_move)
+        assert result is False
+        
+        # Test: Can immediately use follow-up after bait
+        pokemon.energy = 90  # 90 - 35 = 55, enough for 50 energy follow-up
+        result = ActionLogic.validate_baiting_energy_requirements(pokemon, bait_move, follow_up_move)
+        assert result is True
+        
+        # Test: Need fast moves for follow-up (reasonable amount)
+        pokemon.energy = 60  # 60 - 35 = 25, need 25 more energy for follow-up
+        pokemon.fast_move.energy_gain = 10  # Need 3 fast moves (25/10 = 2.5 -> 3)
+        result = ActionLogic.validate_baiting_energy_requirements(pokemon, bait_move, follow_up_move)
+        assert result is True
+        
+        # Test: Too many fast moves needed
+        pokemon.energy = 40  # 40 - 35 = 5, need 45 more energy
+        pokemon.fast_move.energy_gain = 5  # Need 9 fast moves (45/5 = 9) - too many
+        result = ActionLogic.validate_baiting_energy_requirements(pokemon, bait_move, follow_up_move)
+        assert result is False
 
 
 if __name__ == "__main__":

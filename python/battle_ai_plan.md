@@ -69,11 +69,11 @@ The Python `decide_action` method is only **partially implemented** (lines 270-2
         - ✅ Implement DPE (Damage Per Energy) calculation for moves
         - ✅ Add basic shield baiting decision logic
         - ✅ Integrate with `would_shield` prediction method
-    - ⏳ Step 1K: Add DPE Ratio Analysis
-        - ⏳ Implement DPE ratio comparison between moves
-        - ⏳ Add 1.5x DPE ratio threshold logic
-        - ⏳ Add opponent shield prediction for move selection
-        - ⏳ Add energy requirement validation for bait moves
+    - ✅ Step 1K: Add DPE Ratio Analysis (COMPLETED)
+        - ✅ Implement DPE ratio comparison between moves
+        - ✅ Add 1.5x DPE ratio threshold logic
+        - ✅ Add opponent shield prediction for move selection
+        - ✅ Add energy requirement validation for bait moves
     - ⏳ Step 1L: Implement Move Reordering Logic
         - ⏳ Add move sorting by damage when not baiting
         - ⏳ Implement low-energy move preference when shields are up
