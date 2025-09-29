@@ -2,7 +2,7 @@
 
 import math
 import random
-from typing import Optional, Dict, List, Tuple, Any
+from typing import Optional, Dict, List, Tuple, Any, Union
 from dataclasses import dataclass
 from ..core.pokemon import Pokemon
 from ..core.moves import FastMove, ChargedMove
@@ -39,6 +39,11 @@ class DecisionOption:
     name: str
     weight: int
     move: Optional[ChargedMove] = None  # Add move reference for lethal detection
+
+
+class UseFastMoveMarker:
+    """Special marker class to indicate advanced baiting wants to use fast move."""
+    pass
 
 
 @dataclass
@@ -1130,6 +1135,16 @@ class ActionLogic:
             len(active_charged_moves) <= 1):
             return selected_move
         
+        # STEP 1M: ADVANCED BAITING CONDITIONS
+        # Apply advanced baiting conditions before proceeding with baiting logic
+        advanced_baiting_result = ActionLogic._apply_advanced_baiting_conditions(
+            poke, opponent, selected_move, active_charged_moves, battle
+        )
+        if isinstance(advanced_baiting_result, UseFastMoveMarker):
+            return None  # Use fast move to build energy
+        elif advanced_baiting_result is not None:
+            return advanced_baiting_result
+        
         # STEP 1K: Enhanced DPE Ratio Analysis
         # Try the new DPE analysis first
         if ActionLogic.should_use_dpe_ratio_analysis(battle, poke, opponent, selected_move):
@@ -1168,6 +1183,106 @@ class ActionLogic:
                 return higher_energy_move
         
         return selected_move
+    
+    # ========== ADVANCED BAITING CONDITIONS (Step 1M) ==========
+    
+    @staticmethod
+    def _apply_advanced_baiting_conditions(poke: Pokemon, opponent: Pokemon, 
+                                         selected_move: ChargedMove, 
+                                         active_charged_moves: List[ChargedMove],
+                                         battle = None) -> Union[ChargedMove, UseFastMoveMarker, None]:
+        """
+        Apply advanced baiting conditions based on JavaScript ActionLogic lines 820-836.
+        
+        Advanced conditions:
+        1. Build up to expensive move logic - farm energy instead of using current move
+        2. Self-buffing move exception handling - don't bait if effective self-buffing move
+        3. Low health baiting prevention - don't bait if very low health
+        4. Close DPE move handling - special logic for moves within 10 energy
+        
+        Args:
+            poke: Pokemon making the decision
+            opponent: Opponent Pokemon
+            selected_move: Currently selected move
+            active_charged_moves: All available charged moves
+            battle: Battle instance for logging
+            
+        Returns:
+            None to continue with normal baiting logic, or a move to use instead
+        """
+        # Find the most expensive move in active charged moves (typically index 1)
+        most_expensive_move = max(active_charged_moves, key=lambda m: m.energy_cost)
+        
+        # 1. BUILD UP TO EXPENSIVE MOVE LOGIC
+        # JavaScript: if ((poke.energy < poke.activeChargedMoves[1].energy)&&(poke.activeChargedMoves[1].dpe > finalState.moves[0].dpe))
+        if (poke.energy < most_expensive_move.energy_cost and 
+            most_expensive_move != selected_move):
+            
+            # Calculate DPE for comparison
+            expensive_dpe = ActionLogic.calculate_move_dpe(poke, opponent, most_expensive_move)
+            selected_dpe = ActionLogic.calculate_move_dpe(poke, opponent, selected_move)
+            
+            if expensive_dpe > selected_dpe:
+                # Check for self-buffing move exception
+                # JavaScript: if((poke.activeChargedMoves[1].dpe / poke.activeChargedMoves[0].dpe <= 1.5)&&(poke.activeChargedMoves[0].selfBuffing))
+                if selected_dpe > 0:  # Avoid division by zero
+                    dpe_ratio = expensive_dpe / selected_dpe
+                    
+                    # 2. SELF-BUFFING MOVE EXCEPTION HANDLING
+                    if (dpe_ratio <= 1.5 and getattr(selected_move, 'self_buffing', False)):
+                        ActionLogic._log_decision(battle, poke, f" not baiting: effective self-buffing move {selected_move.move_id} (DPE ratio: {dpe_ratio:.2f})")
+                        return selected_move  # Don't bait, use the self-buffing move
+                
+                # 3. LOW HEALTH BAITING PREVENTION
+                # JavaScript TrainingAI: if((pokemon.hp / pokemon.stats.hp < .25)&&(pokemon.energy < 70))
+                health_ratio = poke.current_hp / poke.stats.hp if poke.stats.hp > 0 else 0
+                if health_ratio < 0.25 and poke.energy < 70:
+                    ActionLogic._log_decision(battle, poke, f" not baiting: low health ({health_ratio:.1%} HP, {poke.energy} energy)")
+                    return selected_move  # Don't bait when health is very low
+                
+                # Build up to expensive move - return marker to use fast move instead
+                ActionLogic._log_decision(battle, poke, f" building up to expensive move {most_expensive_move.move_id} (need {most_expensive_move.energy_cost - poke.energy} more energy)")
+                return UseFastMoveMarker()  # Signal to use fast move to build energy
+        
+        # 4. CLOSE DPE MOVE HANDLING (within 10 energy)
+        # JavaScript Pokemon.js lines 755-787: special handling for moves with similar energy costs
+        for move in active_charged_moves:
+            if (move != selected_move and 
+                abs(move.energy_cost - selected_move.energy_cost) <= 10):
+                
+                # If both moves cost similar energy and one has a buff effect, prioritize the buffing move
+                if (getattr(move, 'self_buffing', False) and 
+                    not getattr(selected_move, 'self_buffing', False)):
+                    
+                    move_dpe = ActionLogic.calculate_move_dpe(poke, opponent, move)
+                    selected_dpe = ActionLogic.calculate_move_dpe(poke, opponent, selected_move)
+                    
+                    # JavaScript: if(self.activeChargedMoves[0].dpe - self.activeChargedMoves[1].dpe < .3)
+                    if selected_dpe - move_dpe < 0.3:
+                        ActionLogic._log_decision(battle, poke, f" close DPE: prioritizing self-buffing move {move.move_id}")
+                        return move
+                
+                # If the cheaper move is self-debuffing and the other is close non-debuffing, prioritize non-debuffing
+                if (getattr(selected_move, 'self_attack_debuffing', False) and 
+                    not getattr(move, 'self_debuffing', False)):
+                    ActionLogic._log_decision(battle, poke, f" close DPE: avoiding self-debuffing move {selected_move.move_id}")
+                    return move
+                
+                # Special case for expensive self-debuffing moves that cannot be stacked
+                if (getattr(selected_move, 'self_debuffing', False) and 
+                    selected_move.energy_cost > 50 and 
+                    not getattr(move, 'self_debuffing', False)):
+                    ActionLogic._log_decision(battle, poke, f" close DPE: avoiding expensive self-debuffing move {selected_move.move_id}")
+                    return move
+                
+                # If the second move is close energy and self-buffing, prioritize it as bait
+                if (move.energy_cost - selected_move.energy_cost <= 5 and 
+                    getattr(move, 'self_buffing', False)):
+                    ActionLogic._log_decision(battle, poke, f" close DPE: prioritizing close self-buffing bait {move.move_id}")
+                    return move
+        
+        # No advanced conditions triggered, continue with normal baiting logic
+        return None
     
     # ========== DPE RATIO ANALYSIS METHODS (Step 1K) ==========
     

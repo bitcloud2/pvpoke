@@ -79,11 +79,11 @@ The Python `decide_action` method is only **partially implemented** (lines 270-2
         - ✅ Implement low-energy move preference when shields are up
         - ✅ Add self-debuffing move avoidance during baiting
         - ✅ Add energy-efficient move selection logic
-    - ⏳ Step 1M: Add Advanced Baiting Conditions
-        - ⏳ Implement "build up to expensive move" logic
-        - ⏳ Add self-buffing move exception handling
-        - ⏳ Add low health baiting prevention
-        - ⏳ Add close DPE move handling (within 10 energy)
+    - ✅ Step 1M: Add Advanced Baiting Conditions (COMPLETED)
+        - ✅ Implement "build up to expensive move" logic
+        - ✅ Add self-buffing move exception handling
+        - ✅ Add low health baiting prevention
+        - ✅ Add close DPE move handling (within 10 energy)
     - ⏳ Step 1N: Integrate Shield Baiting with DP Algorithm
         - ⏳ Add baiting logic to DP state evaluation
         - ⏳ Implement baiting weight calculation in decision options
