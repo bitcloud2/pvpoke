@@ -72,6 +72,7 @@ class Pokemon:
     # AI behavior properties
     farm_energy: bool = False
     bait_shields: bool = False
+    optimize_move_timing: bool = False
     priority: int = 0
     index: int = 0  # Player index (0 or 1)
     

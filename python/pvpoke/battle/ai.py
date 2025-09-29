@@ -749,6 +749,138 @@ class ActionLogic:
             no_shield_weight=no_shield_weight
         )
     
+    # ========== MOVE TIMING OPTIMIZATION METHODS (Step 2B) ==========
+    
+    @staticmethod
+    def calculate_target_cooldown(poke: Pokemon, opponent: Pokemon) -> int:
+        """Calculate the target cooldown for optimal move timing."""
+        target_cooldown = 500  # Default: throw when opponent has 500ms or less cooldown
+        
+        # Rule 1: Pokemon with 4+ turn moves (2000ms+) use 1000ms target
+        if poke.fast_move.cooldown >= 2000:
+            target_cooldown = 1000
+        
+        # Rule 2: 3-turn vs 5-turn matchup (1500ms vs 2500ms)
+        if poke.fast_move.cooldown >= 1500 and opponent.fast_move.cooldown == 2500:
+            target_cooldown = 1000
+        
+        # Rule 3: 2-turn vs 4-turn matchup (1000ms vs 2000ms)  
+        if poke.fast_move.cooldown == 1000 and opponent.fast_move.cooldown == 2000:
+            target_cooldown = 1000
+        
+        return target_cooldown
+    
+    @staticmethod
+    def should_disable_timing_optimization(poke: Pokemon, opponent: Pokemon) -> bool:
+        """Check if timing optimization should be disabled."""
+        
+        # Disable for same duration moves (no advantage possible)
+        if poke.fast_move.cooldown == opponent.fast_move.cooldown:
+            return True
+        
+        # Disable for evenly divisible longer moves (e.g., 4-turn vs 2-turn, 3-turn vs 1-turn)
+        if (poke.fast_move.cooldown % opponent.fast_move.cooldown == 0 and 
+            poke.fast_move.cooldown > opponent.fast_move.cooldown):
+            return True
+        
+        return False
+    
+    @staticmethod
+    def check_survival_conditions(battle, poke: Pokemon, opponent: Pokemon) -> bool:
+        """Verify Pokemon can safely optimize timing without fainting."""
+        
+        # Don't optimize if about to faint from opponent's fast move
+        if poke.current_hp <= opponent.fast_move.damage:
+            return False
+        
+        # Don't optimize if opponent can KO with fast moves during our fast move
+        fast_moves_in_window = math.floor((poke.fast_move.cooldown + 500) / opponent.fast_move.cooldown)
+        if poke.current_hp <= opponent.fast_move.damage * fast_moves_in_window:
+            return False
+        
+        return True
+    
+    @staticmethod
+    def check_energy_conditions(battle, poke: Pokemon) -> bool:
+        """Ensure energy won't overflow with timing optimization."""
+        
+        # Count queued fast moves
+        queued_fast_moves = 0
+        
+        # Check if battle has get_queued_actions method (Step 2C implementation)
+        if hasattr(battle, 'get_queued_actions'):
+            queued_actions = battle.get_queued_actions()
+            
+            for action in queued_actions:
+                if action.actor == poke.index and action.type == "fast":
+                    queued_fast_moves += 1
+        
+        # Add 1 for the fast move we're considering
+        queued_fast_moves += 1
+        
+        # Don't optimize if we'll exceed 100 energy
+        future_energy = poke.energy + (poke.fast_move.energy_gain * queued_fast_moves)
+        if future_energy > 100:
+            return False
+        
+        return True
+    
+    @staticmethod
+    def check_strategic_conditions(battle, poke: Pokemon, opponent: Pokemon, turns_to_live: int) -> bool:
+        """Check strategic conditions for timing optimization."""
+        
+        # Get active charged moves
+        active_charged_moves = []
+        if poke.charged_move_1:
+            active_charged_moves.append(poke.charged_move_1)
+        if poke.charged_move_2:
+            active_charged_moves.append(poke.charged_move_2)
+        
+        if not active_charged_moves:
+            return False
+        
+        # Calculate planned turns (fast move + charged moves we can throw)
+        planned_turns = poke.fast_move.turns + math.floor(poke.energy / active_charged_moves[0].energy_cost)
+        
+        # Add extra turn if we lose CMP (lower attack stat)
+        if poke.stats.atk < opponent.stats.atk:
+            planned_turns += 1
+        
+        # Don't optimize if we have fewer turns to live than planned actions
+        if planned_turns > turns_to_live:
+            return False
+        
+        # Don't optimize if we can KO opponent with a charged move (no shields)
+        if opponent.shields == 0:
+            for move in active_charged_moves:
+                move_damage = DamageCalculator.calculate_damage(poke, opponent, move)
+                if poke.energy >= move.energy_cost and move_damage >= opponent.current_hp:
+                    return False
+        
+        # Don't optimize if opponent can KO us with their charged move
+        opponent_charged_moves = []
+        if opponent.charged_move_1:
+            opponent_charged_moves.append(opponent.charged_move_1)
+        if opponent.charged_move_2:
+            opponent_charged_moves.append(opponent.charged_move_2)
+        
+        for move in opponent_charged_moves:
+            fast_moves_needed = math.ceil((move.energy_cost - opponent.energy) / opponent.fast_move.energy_gain)
+            fast_moves_in_window = math.floor(poke.fast_move.cooldown / opponent.fast_move.cooldown)
+            turns_from_move = (fast_moves_needed * opponent.fast_move.turns) + 1
+            
+            move_damage = DamageCalculator.calculate_damage(opponent, poke, move)
+            total_damage = move_damage + (opponent.fast_move.damage * fast_moves_in_window)
+            
+            # Account for shields
+            if poke.shields > 0:
+                total_damage = 1 + (opponent.fast_move.damage * fast_moves_in_window)
+            
+            if turns_from_move <= poke.fast_move.turns and total_damage >= poke.current_hp:
+                return False
+        
+        return True
+    
     @staticmethod
     def _log_decision(battle, poke: Pokemon, message: str):
         """Log a decision for debugging purposes."""
