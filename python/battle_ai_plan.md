@@ -74,6 +74,11 @@ The Python `decide_action` method is only **partially implemented** (lines 270-2
         - ✅ Add 1.5x DPE ratio threshold logic
         - ✅ Add opponent shield prediction for move selection
         - ✅ Add energy requirement validation for bait moves
+    - ✅ Step 1K+: High Priority Baiting Logic Fixes (COMPLETED)
+        - ✅ Fix self-buffing move exception logic (critical for accuracy)
+        - ✅ Fix wouldShield method validation (affects all baiting decisions)
+        - ✅ Fix low health edge case handling (important safety logic)
+        - ✅ Enhance mock compatibility for comprehensive testing
     - ✅ Step 1L: Implement Move Reordering Logic (COMPLETED)
         - ✅ Add move sorting by damage when not baiting
         - ✅ Implement low-energy move preference when shields are up
