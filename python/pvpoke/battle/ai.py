@@ -1087,14 +1087,15 @@ class ActionLogic:
                                    active_charged_moves: List[ChargedMove],
                                    battle = None) -> ChargedMove:
         """
-        Apply enhanced shield baiting logic with DPE ratio analysis.
+        Apply enhanced shield baiting logic with DPE ratio analysis and move reordering.
         
-        Based on JavaScript ActionLogic lines 838-847:
+        Based on JavaScript ActionLogic lines 838-878:
         - Don't bait if the opponent won't shield
         - Check DPE ratio between moves (must be > 1.5x)
         - Ensure Pokemon has enough energy for the higher DPE move
         - Use would_shield prediction to determine if baiting is worthwhile
         - Enhanced with Step 1K DPE ratio analysis
+        - Enhanced with Step 1L move reordering logic
         
         Args:
             poke: Pokemon making the decision
@@ -1104,13 +1105,24 @@ class ActionLogic:
             battle: Battle instance for enhanced analysis
             
         Returns:
-            The move to use (either original or baited move)
+            The move to use (after baiting and reordering logic)
         """
         # Default to the first move from optimal sequence
         if not optimal_moves:
             return active_charged_moves[0] if active_charged_moves else None
-            
-        selected_move = optimal_moves[0]
+        
+        # STEP 1L: Apply move reordering logic first
+        # Determine if Pokemon needs boost and if any moves are debuffing
+        needs_boost = False  # TODO: Implement boost detection logic
+        debuffing_move = any(getattr(move, 'self_debuffing', False) for move in optimal_moves)
+        
+        # Apply move reordering to the optimal moves
+        reordered_moves = ActionLogic.apply_move_reordering_logic(
+            poke, opponent, optimal_moves, active_charged_moves, 
+            needs_boost, debuffing_move, battle
+        )
+        
+        selected_move = reordered_moves[0] if reordered_moves else optimal_moves[0]
         
         # Don't bait if the opponent won't shield, or if we don't have bait_shields enabled
         if (not getattr(poke, 'bait_shields', False) or 
@@ -1366,6 +1378,223 @@ class ActionLogic:
                 return True
         
         return False
+    
+    # ========== MOVE REORDERING LOGIC METHODS (Step 1L) ==========
+    
+    @staticmethod
+    def apply_move_reordering_logic(poke: Pokemon, opponent: Pokemon, 
+                                   optimal_moves: List[ChargedMove], 
+                                   active_charged_moves: List[ChargedMove],
+                                   needs_boost: bool = False,
+                                   debuffing_move: bool = False,
+                                   battle = None) -> List[ChargedMove]:
+        """
+        Apply move reordering logic based on JavaScript ActionLogic lines 849-878.
+        
+        Reordering rules:
+        1. If not baiting shields or shields are down (and no debuffing moves), sort by damage
+        2. If shields are up, prefer low energy moves that are more efficient
+        3. If shields are down, prefer non-debuffing moves in certain conditions
+        4. Force more efficient moves of same/similar energy costs
+        
+        Args:
+            poke: Pokemon making the decision
+            opponent: Opponent Pokemon
+            optimal_moves: Moves from DP algorithm
+            active_charged_moves: All available charged moves
+            needs_boost: Whether Pokemon needs stat boosts
+            debuffing_move: Whether any move is debuffing
+            battle: Battle instance for logging
+            
+        Returns:
+            Reordered list of moves
+        """
+        if not optimal_moves:
+            return optimal_moves
+        
+        # Make a copy to avoid modifying the original
+        reordered_moves = optimal_moves.copy()
+        
+        # Rule 1: If pokemon needs boost, we cannot reorder and no moves both buff and debuff
+        if needs_boost:
+            return reordered_moves
+        
+        # Rule 2: If not baiting shields or shields are down and no moves debuff, throw most damaging move first
+        if (not getattr(poke, 'bait_shields', False) or 
+            (opponent.shields == 0 and not debuffing_move)):
+            
+            ActionLogic._sort_moves_by_damage(poke, opponent, reordered_moves, battle)
+        
+        # Rule 3: If shields are up, prefer low energy moves that are more efficient
+        if (opponent.shields > 0 and len(active_charged_moves) > 1 and 
+            len(reordered_moves) > 0):
+            
+            reordered_moves[0] = ActionLogic._prefer_efficient_low_energy_move(
+                poke, opponent, reordered_moves[0], active_charged_moves, battle)
+        
+        # Rule 4: If shields are down, prefer non-debuffing moves if both sides have significant HP remaining
+        if (opponent.shields == 0 and len(active_charged_moves) > 1 and 
+            len(reordered_moves) > 0):
+            
+            reordered_moves[0] = ActionLogic._prefer_non_debuffing_move_shields_down(
+                poke, opponent, reordered_moves[0], active_charged_moves, battle)
+        
+        # Rule 5: Force more efficient move of the same energy
+        if len(active_charged_moves) > 1 and len(reordered_moves) > 0:
+            reordered_moves[0] = ActionLogic._force_efficient_same_energy_move(
+                poke, opponent, reordered_moves[0], active_charged_moves, battle)
+        
+        # Rule 6: Force more efficient move of similar energy if chosen move is self debuffing
+        if len(active_charged_moves) > 1 and len(reordered_moves) > 0:
+            reordered_moves[0] = ActionLogic._force_efficient_similar_energy_move(
+                poke, opponent, reordered_moves[0], active_charged_moves, battle)
+        
+        return reordered_moves
+    
+    @staticmethod
+    def _sort_moves_by_damage(poke: Pokemon, opponent: Pokemon, moves: List[ChargedMove], battle = None):
+        """
+        Sort moves by damage output (highest damage first).
+        
+        Based on JavaScript ActionLogic lines 853-857.
+        """
+        def damage_comparator(move_a, move_b):
+            damage_a = DamageCalculator.calculate_damage(poke, opponent, move_a)
+            damage_b = DamageCalculator.calculate_damage(poke, opponent, move_b)
+            return damage_b - damage_a  # Sort descending (highest damage first)
+        
+        # Python equivalent of JavaScript sort with custom comparator
+        from functools import cmp_to_key
+        moves.sort(key=cmp_to_key(damage_comparator))
+        
+        if battle and len(moves) > 1:
+            ActionLogic._log_decision(battle, poke, f" reordering: sorted moves by damage")
+    
+    @staticmethod
+    def _prefer_efficient_low_energy_move(poke: Pokemon, opponent: Pokemon, 
+                                         current_move: ChargedMove, 
+                                         active_charged_moves: List[ChargedMove],
+                                         battle = None) -> ChargedMove:
+        """
+        Prefer low energy moves that are more efficient when shields are up.
+        
+        Based on JavaScript ActionLogic line 862:
+        poke.activeChargedMoves[0].energy <= finalState.moves[0].energy && 
+        poke.activeChargedMoves[0].dpe > finalState.moves[0].dpe && 
+        (! poke.activeChargedMoves[0].selfDebuffing)
+        """
+        if len(active_charged_moves) < 1:
+            return current_move
+        
+        # Get the lowest energy move (first in activeChargedMoves)
+        lowest_energy_move = active_charged_moves[0]
+        
+        # Check conditions from JavaScript
+        if (lowest_energy_move.energy_cost <= current_move.energy_cost and
+            ActionLogic.calculate_move_dpe(poke, opponent, lowest_energy_move) > 
+            ActionLogic.calculate_move_dpe(poke, opponent, current_move) and
+            not getattr(lowest_energy_move, 'self_debuffing', False)):
+            
+            if battle:
+                ActionLogic._log_decision(battle, poke, 
+                    f" reordering: preferring efficient low energy move {lowest_energy_move.move_id}")
+            return lowest_energy_move
+        
+        return current_move
+    
+    @staticmethod
+    def _prefer_non_debuffing_move_shields_down(poke: Pokemon, opponent: Pokemon,
+                                               current_move: ChargedMove,
+                                               active_charged_moves: List[ChargedMove],
+                                               battle = None) -> ChargedMove:
+        """
+        Prefer non-debuffing moves when shields are down if both sides have significant HP.
+        
+        Based on JavaScript ActionLogic line 867:
+        finalState.moves[0].selfDebuffing && finalState.moves[0].energy > 50 && 
+        (poke.hp / poke.stats.hp) > .5 && (finalState.moves[0].damage / opponent.hp) < .8
+        """
+        if (not getattr(current_move, 'self_debuffing', False) or
+            current_move.energy_cost <= 50 or
+            len(active_charged_moves) < 1):
+            return current_move
+        
+        # Check HP conditions
+        poke_hp_ratio = poke.current_hp / poke.stats.hp
+        move_damage = DamageCalculator.calculate_damage(poke, opponent, current_move)
+        damage_ratio = move_damage / opponent.current_hp
+        
+        if poke_hp_ratio > 0.5 and damage_ratio < 0.8:
+            # Look for non-debuffing alternative (typically activeChargedMoves[0])
+            alternative_move = active_charged_moves[0]
+            if not getattr(alternative_move, 'self_debuffing', False):
+                if battle:
+                    ActionLogic._log_decision(battle, poke,
+                        f" reordering: preferring non-debuffing move {alternative_move.move_id} (shields down)")
+                return alternative_move
+        
+        return current_move
+    
+    @staticmethod
+    def _force_efficient_same_energy_move(poke: Pokemon, opponent: Pokemon,
+                                         current_move: ChargedMove,
+                                         active_charged_moves: List[ChargedMove],
+                                         battle = None) -> ChargedMove:
+        """
+        Force more efficient move of the same energy cost.
+        
+        Based on JavaScript ActionLogic line 872:
+        poke.activeChargedMoves[0].energy == finalState.moves[0].energy && 
+        poke.activeChargedMoves[0].dpe > finalState.moves[0].dpe && 
+        (! poke.activeChargedMoves[0].selfDebuffing)
+        """
+        if len(active_charged_moves) < 1:
+            return current_move
+        
+        alternative_move = active_charged_moves[0]
+        
+        if (alternative_move.energy_cost == current_move.energy_cost and
+            ActionLogic.calculate_move_dpe(poke, opponent, alternative_move) >
+            ActionLogic.calculate_move_dpe(poke, opponent, current_move) and
+            not getattr(alternative_move, 'self_debuffing', False)):
+            
+            if battle:
+                ActionLogic._log_decision(battle, poke,
+                    f" reordering: forcing efficient same energy move {alternative_move.move_id}")
+            return alternative_move
+        
+        return current_move
+    
+    @staticmethod
+    def _force_efficient_similar_energy_move(poke: Pokemon, opponent: Pokemon,
+                                            current_move: ChargedMove,
+                                            active_charged_moves: List[ChargedMove],
+                                            battle = None) -> ChargedMove:
+        """
+        Force more efficient move of similar energy if chosen move is self debuffing.
+        
+        Based on JavaScript ActionLogic line 877:
+        poke.activeChargedMoves[0].energy - 10 <= finalState.moves[0].energy && 
+        poke.activeChargedMoves[0].dpe > finalState.moves[0].dpe && 
+        finalState.moves[0].selfDebuffing && (! poke.activeChargedMoves[0].selfDebuffing)
+        """
+        if (len(active_charged_moves) < 1 or
+            not getattr(current_move, 'self_debuffing', False)):
+            return current_move
+        
+        alternative_move = active_charged_moves[0]
+        
+        if (alternative_move.energy_cost - 10 <= current_move.energy_cost and
+            ActionLogic.calculate_move_dpe(poke, opponent, alternative_move) >
+            ActionLogic.calculate_move_dpe(poke, opponent, current_move) and
+            not getattr(alternative_move, 'self_debuffing', False)):
+            
+            if battle:
+                ActionLogic._log_decision(battle, poke,
+                    f" reordering: forcing efficient similar energy move {alternative_move.move_id} (avoiding debuff)")
+            return alternative_move
+        
+        return current_move
     
     # ========== ADVANCED LETHAL DETECTION METHODS (Step 1H) ==========
     

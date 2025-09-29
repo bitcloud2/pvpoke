@@ -74,11 +74,11 @@ The Python `decide_action` method is only **partially implemented** (lines 270-2
         - ✅ Add 1.5x DPE ratio threshold logic
         - ✅ Add opponent shield prediction for move selection
         - ✅ Add energy requirement validation for bait moves
-    - ⏳ Step 1L: Implement Move Reordering Logic
-        - ⏳ Add move sorting by damage when not baiting
-        - ⏳ Implement low-energy move preference when shields are up
-        - ⏳ Add self-debuffing move avoidance during baiting
-        - ⏳ Add energy-efficient move selection logic
+    - ✅ Step 1L: Implement Move Reordering Logic (COMPLETED)
+        - ✅ Add move sorting by damage when not baiting
+        - ✅ Implement low-energy move preference when shields are up
+        - ✅ Add self-debuffing move avoidance during baiting
+        - ✅ Add energy-efficient move selection logic
     - ⏳ Step 1M: Add Advanced Baiting Conditions
         - ⏳ Implement "build up to expensive move" logic
         - ⏳ Add self-buffing move exception handling
@@ -1371,22 +1371,24 @@ def test_self_debuffing_avoidance():
 
 ## Current Status
 
-✅ **Completed (~60%)**:
+✅ **Completed (~65%)**:
 - Basic ActionLogic class structure
 - Complete DP queue algorithm implementation (Steps 1A-1C)
 - Complete Move Timing Optimization system (Steps 1D-1F)
 - Complete Basic Lethal Move Detection system (Step 1G)
 - Complete Advanced Lethal Move Detection system (Step 1H)
 - Complete Lethal Detection DP Integration system (Step 1I)
-- Full `decide_action` implementation with DP algorithm, timing optimization, and advanced lethal detection
+- Complete Shield Baiting Logic with DPE Ratio Analysis (Steps 1J-1K)
+- Complete Move Reordering Logic system (Step 1L)
+- Full `decide_action` implementation with DP algorithm, timing optimization, lethal detection, and move reordering
 - `decide_random_action` method (complete with lethal weight boosting)
 - `would_shield` method (basic implementation)
 - `choose_option` method (complete)
 - Battle context methods (`get_queued_actions`, `log_decision`, `get_mode`)
 - Comprehensive test coverage for all implemented components
 
-❌ **Missing (~40%)**:
-- Shield baiting logic
+❌ **Missing (~35%)**:
+- Advanced baiting conditions (Step 1M)
 - Self-debuffing move handling
 - Energy stacking logic
 - Pokemon/Move property extensions
