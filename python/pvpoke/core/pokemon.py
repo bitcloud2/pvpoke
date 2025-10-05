@@ -518,5 +518,60 @@ class Pokemon:
         if form_id == "aegislash_shield":
             self.initialize_aegislash_moves()
     
+    def has_shield_pressure_trait(self, target_defense: float = 100) -> bool:
+        """
+        Determine if this Pokemon has the "Shield Pressure" trait.
+        
+        Shield Pressure indicates a Pokemon can pressure opponents to use shields
+        due to strong or rapid charged move attacks.
+        
+        JavaScript Reference (Pokemon.js lines 1468-1477):
+        var effectivePower = ((self.bestChargedMove.power * self.bestChargedMove.stab * 
+                              self.shadowAtkMult) * (self.stats.atk / targetDef));
+        var bestChargedMoveSpeed = Math.ceil(self.bestChargedMove.energy / self.fastMove.energyGain) * 
+                                   (self.fastMove.cooldown / 500);
+        effectivePower = effectivePower * (30 / bestChargedMoveSpeed);
+        
+        if(effectivePower >= 210 || self.speciesId == "aegislash_shield"){
+            pros.push({trait: "Shield Pressure", desc: "..."});
+        }
+        
+        Args:
+            target_defense: Target defense stat for calculation (default 100)
+            
+        Returns:
+            True if Pokemon has shield pressure trait
+        """
+        # Special case: Aegislash Shield form always has shield pressure
+        # This is because of its unique form-change mechanics and rapid charged move access
+        if self.species_id == "aegislash_shield":
+            return True
+        
+        # Calculate effective power if best charged move is available
+        if not self.best_charged_move or not self.fast_move:
+            return False
+        
+        stats = self.calculate_stats()
+        shadow_mult = 1.2 if self.shadow_type == "shadow" else 1.0
+        stab = 1.2 if self.best_charged_move.move_type in self.types else 1.0
+        
+        # Calculate effective power
+        effective_power = (
+            (self.best_charged_move.power * stab * shadow_mult) * 
+            (stats.atk / target_defense)
+        )
+        
+        # Calculate time to charge best charged move (in turns)
+        best_charged_move_speed = (
+            math.ceil(self.best_charged_move.energy_cost / self.fast_move.energy_gain) * 
+            (self.fast_move.cooldown / 500)
+        )
+        
+        # Normalize effective power by speed (30 turns baseline)
+        effective_power = effective_power * (30 / best_charged_move_speed)
+        
+        # Threshold is 210 for shield pressure
+        return effective_power >= 210
+    
     def __repr__(self):
         return f"Pokemon(species={self.species_name}, cp={self.cp}, level={self.level}, ivs={self.ivs})"

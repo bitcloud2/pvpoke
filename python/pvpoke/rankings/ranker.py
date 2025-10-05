@@ -188,12 +188,29 @@ class Ranker:
             # Calculate average rating
             avg_rating = total_rating / len(matchups) if matchups else 500
             
+            # Build moveset array from Pokemon's moves
+            moveset = [pokemon.fast_move.move_id, pokemon.charged_move_1.move_id]
+            if pokemon.charged_move_2:
+                moveset.append(pokemon.charged_move_2.move_id)
+            
+            # Apply special case overrides (Ranker.js lines 520-526)
+            # Morpeko Full Belly form uses AURA_WHEEL_ELECTRIC
+            if pokemon.species_id == "morpeko_full_belly":
+                moveset[1] = "AURA_WHEEL_ELECTRIC"
+            
+            # Aegislash Shield form uses AEGISLASH_CHARGE_PSYCHO_CUT as fast move
+            # This is because Shield form's actual fast move in rankings should show
+            # the special charging fast move used during form changes
+            if pokemon.species_id == "aegislash_shield":
+                moveset[0] = "AEGISLASH_CHARGE_PSYCHO_CUT"
+            
             rankings.append({
                 "speciesId": pokemon.species_id,
                 "speciesName": pokemon.species_name,
                 "rating": avg_rating,
                 "matches": matchups,
-                "scores": [avg_rating]  # Will be updated in weighted iterations
+                "scores": [avg_rating],  # Will be updated in weighted iterations
+                "moveset": moveset  # Store moveset for later use
             })
         
         # Apply weighted iterations
@@ -269,9 +286,43 @@ class Ranker:
                 
                 ranking["scores"].append(weighted_score)
         
-        # Update final scores and sort
-        for ranking in rankings:
+        # Update final scores and apply scenario-specific adjustments
+        for i, ranking in enumerate(rankings):
             ranking["score"] = ranking["scores"][-1]  # Use final iteration score
+            
+            # For chargers scenario, factor in Fast Move pressure and energy carryover
+            # (Ranker.js lines 532-537)
+            if scenario.slug == "chargers":
+                pokemon = self.pokemon_list[i]
+                
+                # Calculate fast move DPT (damage per turn)
+                # DPT = (power * STAB * shadow_mult * atk/100) / (cooldown/500)
+                shadow_mult = 1.2 if pokemon.shadow_type == "shadow" else 1.0
+                stab = 1.2 if pokemon.fast_move.move_type in pokemon.types else 1.0
+                stats = pokemon.calculate_stats()
+                fast_move_dpt = (
+                    (pokemon.fast_move.power * stab * shadow_mult) * 
+                    (stats.atk / 100)
+                ) / (pokemon.fast_move.cooldown / 500)
+                
+                # Calculate maximum energy remaining after firing cheapest charged move
+                charged_move_costs = []
+                if pokemon.charged_move_1:
+                    charged_move_costs.append(pokemon.charged_move_1.energy_cost)
+                if pokemon.charged_move_2:
+                    charged_move_costs.append(pokemon.charged_move_2.energy_cost)
+                
+                if charged_move_costs:
+                    min_charged_cost = min(charged_move_costs)
+                    maximum_energy_remaining = 100 - min_charged_cost
+                    
+                    # Apply scoring multiplier
+                    # score *= ((energy_remaining/100)^0.5 * (fastDPT/5)^(1/6))^(1/6)
+                    energy_factor = pow(maximum_energy_remaining / 100, 0.5)
+                    dpt_factor = pow(fast_move_dpt / 5, 1/6)
+                    multiplier = pow(energy_factor * dpt_factor, 1/6)
+                    
+                    ranking["score"] *= multiplier
         
         rankings.sort(key=lambda x: x["score"], reverse=True)
         

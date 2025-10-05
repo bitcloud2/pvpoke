@@ -230,11 +230,14 @@ The Python `decide_action` method now has **comprehensive implementation** of th
         - ✅ Port CP cap enforcement loop (Pokemon.js lines 2430-2445)
         - ✅ Add _calculate_cp_by_base_stats helper method (Pokemon.js lines 394-398)
         - ✅ Add form stats calculation tests (test_aegislash_form_stats.py - 22 tests, all passing)
-    - Step 1AB: Port Aegislash Ranking Special Cases
-        - Port ranking moveset override (Ranker.js lines 524-526)
-        - Set moveset[0] to "AEGISLASH_CHARGE_PSYCHO_CUT" for Shield form
-        - Port shield pressure trait logic (Pokemon.js line 1473)
-        - Add ranking special case tests
+    - ✅ Step 1AB: Port Aegislash Ranking Special Cases (COMPLETED)
+        - ✅ Port ranking moveset override (Ranker.js lines 524-526)
+        - ✅ Set moveset[0] to "AEGISLASH_CHARGE_PSYCHO_CUT" for Shield form
+        - ✅ Port Morpeko moveset override (Ranker.js lines 520-522)
+        - ✅ Port chargers scenario special scoring (Ranker.js lines 532-537)
+        - ✅ Port shield pressure trait logic (Pokemon.js line 1473)
+        - ✅ Add has_shield_pressure_trait method to Pokemon class
+        - ✅ Add ranking special case tests (test_aegislash_ranking_special_cases.py - 20 tests, all passing)
 
 ### **2. MISSING SUPPORTING CLASSES**
 The Python implementation lacks the `DecisionOption` class:
