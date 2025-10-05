@@ -6,7 +6,7 @@ This document tracks the implementation of comprehensive end-to-end battle simul
 
 ## Current Status
 
-### ✅ **COMPLETED (~65% of Battle AI)**
+### ✅ **COMPLETED (~70% of Battle AI)**
 
 1. **DP Queue Algorithm (Steps 1A-1C)** ✅
    - Basic DP queue structure
@@ -37,16 +37,21 @@ This document tracks the implementation of comprehensive end-to-end battle simul
    - Baiting logic integrated into DP algorithm
    - Comprehensive testing
 
+7. **End-to-End Battle Simulations (Phase 1, Steps 1-2)** ✅
+   - Full battle simulations with baiting enabled/disabled (8 tests)
+   - Multi-turn baiting sequences (8 tests)
+   - Turn-by-turn validation and timeline analysis
+
 ### ❌ **REMAINING WORK**
 
 #### **End-to-End Scenarios:**
-- ❌ Full battle simulations with baiting enabled vs disabled
-- ❌ Multi-turn baiting sequences (bait → shield → follow-up)
-- ❌ Complex scenarios with multiple Pokemon and shield counts
-- ❌ Performance testing to ensure DP integration doesn't slow down battles
+- ✅ Full battle simulations with baiting enabled vs disabled (COMPLETED)
+- ✅ Multi-turn baiting sequences (bait → shield → follow-up) (COMPLETED)
+- ❌ Complex scenarios with multiple Pokemon and shield counts (Step 3)
+- ❌ Performance testing to ensure DP integration doesn't slow down battles (Step 4)
 
 #### **Cross-Validation:**
-- ❌ Side-by-side JavaScript comparison on identical battle scenarios
+- ❌ Side-by-side JavaScript comparison on identical battle scenarios (Steps 5-7)
 
 ---
 
@@ -100,65 +105,44 @@ This document tracks the implementation of comprehensive end-to-end battle simul
 
 ### **Step 2: Multi-Turn Baiting Sequences**
 
-**Status:** ❌ Not Started
+**Status:** ✅ **COMPLETED**
 
 **Goal:** Test complex baiting scenarios across multiple turns
 
-**Scenarios to Test:**
-
-#### 2.1: Successful Bait → Shield → Follow-up
-```python
-def test_successful_bait_sequence():
-    """Test: Pokemon uses low-energy move → Opponent shields → Follow-up with high-energy move."""
-    # Setup: Altaria (Dragon Pulse 35E, Sky Attack 45E) vs Azumarill (2 shields)
-    # Turn 1-7: Build to 35 energy
-    # Turn 8: Throw Dragon Pulse (bait)
-    # Turn 9: Opponent shields
-    # Turn 10-12: Build to 45 energy
-    # Turn 13: Throw Sky Attack (no shield left or shield advantage)
-    # Assert: Shield was baited successfully
-```
-
-#### 2.2: Failed Bait → Damage
-```python
-def test_failed_bait_sequence():
-    """Test: Pokemon attempts bait → Opponent doesn't shield → Bait deals damage."""
-    # Setup: Opponent at low HP, won't shield low damage move
-    # Turn X: Throw bait move
-    # Turn X+1: Opponent doesn't shield, takes damage
-    # Assert: Strategy adjusts, continues with optimal moves
-```
-
-#### 2.3: Energy Building → Expensive Move
-```python
-def test_energy_building_for_expensive_move():
-    """Test: Pokemon builds energy past cheap move → Waits for expensive move."""
-    # Setup: Pokemon with 35E and 75E moves
-    # Energy at 40: Could throw 35E, but waits
-    # Energy at 75: Throws expensive move
-    # Assert: Skipped cheap move to build for expensive
-```
-
-#### 2.4: Multi-Shield Bait Sequence
-```python
-def test_multi_shield_bait_sequence():
-    """Test: Pokemon baits multiple shields in sequence."""
-    # Setup: 2v2 shield scenario
-    # Bait 1: Throw cheap move → Shield 1 used
-    # Bait 2: Throw cheap move → Shield 2 used
-    # Finisher: Throw expensive move → No shields left
-    # Assert: Both shields baited before using best move
-```
+**Test Cases Implemented:**
+1. ✅ `test_successful_bait_sequence` - Altaria vs Azumarill (Dragon Pulse 35E, Sky Attack 45E)
+2. ✅ `test_failed_bait_sequence` - Medicham vs Registeel (low HP scenario)
+3. ✅ `test_energy_building_for_expensive_move` - Swampert vs Azumarill (Hydro Cannon 40E, Earthquake 65E)
+4. ✅ `test_multi_shield_bait_sequence` - G-Fisk vs Azumarill (Rock Slide 45E, Earthquake 65E)
+5. ✅ `test_bait_with_self_buffing_move` - Medicham vs Azumarill (Power-Up Punch exception)
+6. ✅ `test_bait_with_self_debuffing_move` - Registeel vs Azumarill (self-debuff avoidance)
+7. ✅ `test_shield_advantage_baiting_behavior` - Shield advantage scenario (2v1)
+8. ✅ `test_shield_disadvantage_baiting_behavior` - Shield disadvantage scenario (1v2)
 
 **Acceptance Criteria:**
-- [ ] All 4 baiting sequence types tested
-- [ ] Turn-by-turn validation implemented
-- [ ] Energy tracking verified
-- [ ] Shield usage patterns validated
-- [ ] Decision logging shows correct strategy
+- [x] All 8 baiting sequence types tested (exceeded 4 minimum)
+- [x] Turn-by-turn validation implemented via BattleSequenceAnalyzer
+- [x] Energy tracking verified (approximated via timeline)
+- [x] Shield usage patterns validated
+- [x] Decision logging shows correct strategy via detailed timeline analysis
 
-**Files to Create:**
-- `python/tests/test_e2e_baiting_sequences.py`
+**Files Created:**
+- ✅ `python/tests/test_e2e_baiting_sequences.py` (580 lines, 8 test cases)
+
+**Key Features:**
+- `BattleSequenceAnalyzer` class for comprehensive timeline analysis
+- Detailed tracking of charged move sequences
+- Shield usage pattern analysis
+- Turn-by-turn event logging
+- Support for self-buffing/debuffing move exceptions
+- Shield advantage/disadvantage scenarios
+
+**Key Findings:**
+- All 8 tests pass consistently
+- Timeline logging provides detailed battle sequence information
+- Baiting logic correctly handles various scenarios
+- Shield usage patterns are properly tracked
+- Move sequences are documented and validated
 
 ---
 
@@ -784,11 +768,11 @@ def test_identify_decision_divergence_points():
 
 ### Phase 1: End-to-End Tests
 - [x] Step 1: Baiting Enabled/Disabled (8/8 tests) ✅ **COMPLETED**
-- [ ] Step 2: Multi-Turn Sequences (0/4 tests)
+- [x] Step 2: Multi-Turn Sequences (8/8 tests) ✅ **COMPLETED**
 - [ ] Step 3: Multi-Pokemon Scenarios (0/8 tests)
 - [ ] Step 4: Performance Testing (0/4 tests)
 
-**Phase 1 Progress: 8/28 tests (29%)**
+**Phase 1 Progress: 16/28 tests (57%)**
 
 ### Phase 2: Cross-Validation
 - [ ] Step 5: JavaScript Setup (0/5 tasks)
@@ -798,7 +782,7 @@ def test_identify_decision_divergence_points():
 **Phase 2 Progress: 0/28 tasks (0%)**
 
 ### Overall Progress
-**Total: 8/56 tasks (14%)**
+**Total: 16/56 tasks (29%)**
 
 ---
 
