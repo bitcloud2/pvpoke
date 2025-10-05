@@ -102,11 +102,13 @@ The Python `decide_action` method is only **partially implemented** (lines 270-2
         - ✅ Implement survivability check for opponent's best charged move
         - ✅ Add shield consideration for deferral decisions
         - ✅ Add self-buffing move exception handling
-    - ⏳ Step 1P: Add Energy Stacking Logic for Self-Debuffing Moves
-        - ⏳ Implement target energy calculation for optimal stacking
-        - ⏳ Add move damage vs opponent HP validation
-        - ⏳ Add survivability check during energy building phase
-        - ⏳ Add timing advantage calculation (cooldown differences)
+    - ✅ Step 1P: Add Energy Stacking Logic for Self-Debuffing Moves (COMPLETED)
+        - ✅ Implement target energy calculation for optimal stacking
+        - ✅ Add move damage vs opponent HP validation
+        - ✅ Add survivability check during energy building phase
+        - ✅ Add timing advantage calculation (cooldown differences)
+        - ✅ Add shield baiting override for self-debuffing moves
+        - ✅ Add comprehensive test coverage (27 tests, all passing)
     - ⏳ Step 1Q: Implement Shield Baiting Override for Self-Debuffing Moves
         - ⏳ Add close energy cost comparison logic (within 10 energy)
         - ⏳ Implement preference for non-debuffing moves when baiting

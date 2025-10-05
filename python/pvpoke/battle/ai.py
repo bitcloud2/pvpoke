@@ -595,6 +595,18 @@ class ActionLogic:
                 ActionLogic._log_decision(battle, poke, f" is deferring {selected_move.move_id} until after opponent fires its move")
                 return None  # Use fast move instead
             
+            # STEP 1P: ENERGY STACKING LOGIC FOR SELF-DEBUFFING MOVES
+            # Check if should defer to stack more energy
+            if ActionLogic.should_stack_self_debuffing_move(battle, poke, opponent, selected_move):
+                return None  # Use fast move to build more energy
+            
+            # Check if should override with bait move (when at target energy)
+            bait_override = ActionLogic.should_override_with_bait_move(
+                battle, poke, opponent, selected_move, active_charged_moves
+            )
+            if bait_override:
+                selected_move = bait_override
+            
             # Find the index of the selected move in active charged moves
             move_index = 0
             for i, move in enumerate(active_charged_moves):
@@ -627,6 +639,18 @@ class ActionLogic:
                 if ActionLogic.should_defer_self_debuffing_move(battle, poke, opponent, selected_move):
                     ActionLogic._log_decision(battle, poke, f" is deferring {selected_move.move_id} until after opponent fires its move")
                     return None  # Use fast move instead
+                
+                # STEP 1P: ENERGY STACKING LOGIC FOR SELF-DEBUFFING MOVES
+                # Check if should defer to stack more energy
+                if ActionLogic.should_stack_self_debuffing_move(battle, poke, opponent, selected_move):
+                    return None  # Use fast move to build more energy
+                
+                # Check if should override with bait move (when at target energy)
+                bait_override = ActionLogic.should_override_with_bait_move(
+                    battle, poke, opponent, selected_move, active_charged_moves
+                )
+                if bait_override:
+                    selected_move = bait_override
                 
                 # Find the index of the selected move in active charged moves
                 move_index = 0
@@ -2499,6 +2523,182 @@ class ActionLogic:
         
         return (poke.energy >= lowest_energy_move.energy_cost and 
                 getattr(lowest_energy_move, 'self_buffing', False))
+
+    # ========== ENERGY STACKING LOGIC FOR SELF-DEBUFFING MOVES (Step 1P) ==========
+    
+    @staticmethod
+    def should_stack_self_debuffing_move(battle, poke: Pokemon, opponent: Pokemon, move: ChargedMove) -> bool:
+        """
+        Determine if a self-debuffing move should be deferred to stack more energy.
+        
+        This implements the JavaScript logic from lines 918-935 of ActionLogic.js:
+        - Calculate target energy to stack multiple uses of the move
+        - Only defer if move won't KO opponent
+        - Only defer if Pokemon can survive the energy building phase
+        
+        Args:
+            battle: Battle instance
+            poke: Current Pokemon with the debuffing move
+            opponent: Opponent Pokemon
+            move: The self-debuffing move being considered
+            
+        Returns:
+            True if move should be deferred to build more energy, False otherwise
+        """
+        # Only apply to self-debuffing moves
+        if not getattr(move, 'self_debuffing', False):
+            return False
+        
+        # Calculate target energy for optimal stacking
+        # JavaScript: let targetEnergy = Math.floor(100 / finalState.moves[0].energy) * finalState.moves[0].energy;
+        target_energy = math.floor(100 / move.energy_cost) * move.energy_cost
+        
+        # Only defer if we haven't reached target energy yet
+        if poke.energy >= target_energy:
+            return False
+        
+        # Check if move would KO opponent
+        move_damage = DamageCalculator.calculate_damage(poke, opponent, move)
+        
+        # Don't defer if move would KO (and opponent has no shields)
+        # JavaScript: if ((opponent.hp > moveDamage || opponent.shields != 0) && ...)
+        if opponent.current_hp <= move_damage and opponent.shields == 0:
+            return False
+        
+        # Check survivability during energy building phase
+        # JavaScript: (poke.hp > opponent.fastMove.damage * 2 || opponent.fastMove.cooldown - poke.fastMove.cooldown > 500)
+        survivability_check = ActionLogic._check_energy_building_survivability(poke, opponent)
+        
+        if survivability_check:
+            # Log the decision
+            stack_count = math.floor(100 / move.energy_cost)
+            ActionLogic._log_decision(
+                battle, poke, 
+                f" doesn't use {move.move_id} because it wants to minimize time debuffed and it can stack the move {stack_count} times"
+            )
+            return True
+        
+        return False
+    
+    @staticmethod
+    def _check_energy_building_survivability(poke: Pokemon, opponent: Pokemon) -> bool:
+        """
+        Check if Pokemon can survive while building energy for stacking.
+        
+        Two conditions for survivability:
+        1. Pokemon HP is high enough to tank fast moves (> opponent.fastMove.damage * 2)
+        2. Pokemon has timing advantage (opponent cooldown - poke cooldown > 500ms)
+        
+        Args:
+            poke: Current Pokemon
+            opponent: Opponent Pokemon
+            
+        Returns:
+            True if Pokemon can safely build energy, False otherwise
+        """
+        # Get fast move damage
+        opp_fast_damage = DamageCalculator.calculate_damage(opponent, poke, opponent.fast_move)
+        
+        # Check HP survivability: can tank at least 2 fast moves
+        hp_survivability = poke.current_hp > opp_fast_damage * 2
+        
+        # Check timing advantage: opponent's fast move is significantly slower
+        timing_advantage = ActionLogic._calculate_timing_advantage(poke, opponent)
+        
+        # Return true if either condition is met
+        return hp_survivability or timing_advantage
+    
+    @staticmethod
+    def _calculate_timing_advantage(poke: Pokemon, opponent: Pokemon) -> bool:
+        """
+        Calculate if Pokemon has timing advantage for energy building.
+        
+        Timing advantage exists when opponent's fast move is significantly slower,
+        allowing Pokemon to build energy while taking fewer hits.
+        
+        Args:
+            poke: Current Pokemon
+            opponent: Opponent Pokemon
+            
+        Returns:
+            True if timing advantage exists (cooldown difference > 500ms)
+        """
+        # Get cooldowns from fast moves
+        poke_cooldown = poke.fast_move.turns * 500  # Convert turns to milliseconds
+        opp_cooldown = opponent.fast_move.turns * 500
+        
+        # JavaScript: opponent.fastMove.cooldown - poke.fastMove.cooldown > 500
+        cooldown_difference = opp_cooldown - poke_cooldown
+        
+        return cooldown_difference > 500
+    
+    @staticmethod
+    def should_override_with_bait_move(battle, poke: Pokemon, opponent: Pokemon, 
+                                       current_move: ChargedMove, 
+                                       active_charged_moves: List[ChargedMove]) -> Optional[ChargedMove]:
+        """
+        Check if self-debuffing move should be overridden with a bait move.
+        
+        This implements the shield baiting override from JavaScript lines 929-934:
+        - Only applies when at or above target energy
+        - Only when opponent has shields and baiting is enabled
+        - Prefers non-debuffing moves that are close in energy cost (within 10)
+        
+        Args:
+            battle: Battle instance
+            poke: Current Pokemon
+            opponent: Opponent Pokemon
+            current_move: The self-debuffing move being considered
+            active_charged_moves: List of all active charged moves
+            
+        Returns:
+            Alternative move to use, or None if no override needed
+        """
+        # Only apply to self-debuffing moves
+        if not getattr(current_move, 'self_debuffing', False):
+            return None
+        
+        # Only when baiting shields and opponent has shields
+        if not getattr(poke, 'bait_shields', False) or opponent.shields == 0:
+            return None
+        
+        # Calculate target energy
+        target_energy = math.floor(100 / current_move.energy_cost) * current_move.energy_cost
+        
+        # Only override if at or above target energy
+        if poke.energy < target_energy:
+            return None
+        
+        # Check if we have a suitable bait move
+        if not active_charged_moves:
+            return None
+        
+        # Get the lowest energy move (first in active charged moves)
+        lowest_energy_move = active_charged_moves[0]
+        
+        # Check if energy costs are close (within 10)
+        # JavaScript: poke.activeChargedMoves[0].energy - finalState.moves[0].energy <= 10
+        energy_difference = lowest_energy_move.energy_cost - current_move.energy_cost
+        
+        if energy_difference <= 10 and not getattr(lowest_energy_move, 'self_debuffing', False):
+            # Use the lower energy move if it's self-buffing or opponent would shield the bigger move
+            if getattr(lowest_energy_move, 'self_buffing', False):
+                ActionLogic._log_decision(
+                    battle, poke,
+                    f" using self-buffing bait move {lowest_energy_move.move_id} instead of {current_move.move_id}"
+                )
+                return lowest_energy_move
+            
+            # Check if opponent would shield the current (bigger) move
+            shield_decision = ActionLogic.would_shield(battle, poke, opponent, current_move)
+            if shield_decision.value:
+                ActionLogic._log_decision(
+                    battle, poke,
+                    f" using bait move {lowest_energy_move.move_id} because opponent would shield {current_move.move_id}"
+                )
+                return lowest_energy_move
+        
+        return None
 
 
 # Legacy compatibility methods
