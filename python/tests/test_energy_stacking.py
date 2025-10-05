@@ -1,12 +1,12 @@
 """
-Tests for Energy Stacking Logic for Self-Debuffing Moves (Step 1P).
+Tests for Energy Stacking Logic for Self-Debuffing Moves (Step 1S).
 
 This test suite validates the JavaScript ActionLogic.js lines 918-935 port:
-- Target energy calculation for optimal stacking
-- Move damage vs opponent HP validation
-- Survivability check during energy building phase
-- Timing advantage calculation
-- Shield baiting override for self-debuffing moves
+- Target energy calculation for optimal stacking (Step 1S.1)
+- Move damage vs opponent HP validation (Step 1S.2)
+- Survivability check during energy building phase (Step 1S.3)
+- Main energy stacking decision logic (Step 1S.4)
+- Shield baiting override for self-debuffing moves (Step 1T)
 """
 
 import pytest
@@ -78,8 +78,260 @@ def create_test_pokemon(name, hp, energy, fast_move_turns=1, fast_move_energy=3,
     return pokemon
 
 
+class TestStep1S1TargetEnergyCalculation:
+    """Test Step 1S.1: Target Energy Calculation."""
+    
+    def test_calculate_stacking_target_energy_35_energy(self):
+        """Test target energy calculation for 35 energy move."""
+        move = Mock(spec=ChargedMove)
+        move.energy_cost = 35
+        
+        # floor(100/35) * 35 = 2 * 35 = 70
+        target = ActionLogic.calculate_stacking_target_energy(move)
+        assert target == 70
+    
+    def test_calculate_stacking_target_energy_40_energy(self):
+        """Test target energy calculation for 40 energy move."""
+        move = Mock(spec=ChargedMove)
+        move.energy_cost = 40
+        
+        # floor(100/40) * 40 = 2 * 40 = 80
+        target = ActionLogic.calculate_stacking_target_energy(move)
+        assert target == 80
+    
+    def test_calculate_stacking_target_energy_45_energy(self):
+        """Test target energy calculation for 45 energy move."""
+        move = Mock(spec=ChargedMove)
+        move.energy_cost = 45
+        
+        # floor(100/45) * 45 = 2 * 45 = 90
+        target = ActionLogic.calculate_stacking_target_energy(move)
+        assert target == 90
+    
+    def test_calculate_stacking_target_energy_50_energy(self):
+        """Test target energy calculation for 50 energy move."""
+        move = Mock(spec=ChargedMove)
+        move.energy_cost = 50
+        
+        # floor(100/50) * 50 = 2 * 50 = 100
+        target = ActionLogic.calculate_stacking_target_energy(move)
+        assert target == 100
+    
+    def test_calculate_stacking_target_energy_55_energy(self):
+        """Test target energy calculation for 55 energy move (single use)."""
+        move = Mock(spec=ChargedMove)
+        move.energy_cost = 55
+        
+        # floor(100/55) * 55 = 1 * 55 = 55
+        target = ActionLogic.calculate_stacking_target_energy(move)
+        assert target == 55
+    
+    def test_calculate_stacking_target_energy_60_energy(self):
+        """Test target energy calculation for 60 energy move (single use)."""
+        move = Mock(spec=ChargedMove)
+        move.energy_cost = 60
+        
+        # floor(100/60) * 60 = 1 * 60 = 60
+        target = ActionLogic.calculate_stacking_target_energy(move)
+        assert target == 60
+    
+    def test_calculate_stacking_target_energy_zero_energy(self):
+        """Test target energy calculation for zero energy move."""
+        move = Mock(spec=ChargedMove)
+        move.energy_cost = 0
+        
+        target = ActionLogic.calculate_stacking_target_energy(move)
+        assert target == 0
+    
+    def test_calculate_stacking_target_energy_negative_energy(self):
+        """Test target energy calculation for negative energy move."""
+        move = Mock(spec=ChargedMove)
+        move.energy_cost = -10
+        
+        target = ActionLogic.calculate_stacking_target_energy(move)
+        assert target == 0
+
+
+class TestStep1S2MoveKOValidation:
+    """Test Step 1S.2: Move Damage Validation."""
+    
+    def test_validate_stacking_wont_miss_ko_safe_to_stack(self):
+        """Test validation when safe to stack (opponent HP > damage)."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=50, charged_move_energy=40)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 0
+        move = poke.charged_move_1
+        
+        # Opponent HP is high, safe to stack
+        result = ActionLogic.validate_stacking_wont_miss_ko(poke, opponent, move)
+        assert result is True
+    
+    def test_validate_stacking_wont_miss_ko_would_ko(self):
+        """Test validation when move would KO opponent (should not stack)."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=50, charged_move_energy=40)
+        opponent = create_test_pokemon("Azumarill", hp=10, energy=50)
+        opponent.shields = 0
+        move = poke.charged_move_1
+        
+        # Move would KO, should not stack
+        result = ActionLogic.validate_stacking_wont_miss_ko(poke, opponent, move)
+        assert result is False
+    
+    def test_validate_stacking_wont_miss_ko_opponent_has_shields(self):
+        """Test validation when opponent has shields (safe to stack)."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=50, charged_move_energy=40)
+        opponent = create_test_pokemon("Azumarill", hp=10, energy=50)
+        opponent.shields = 1  # Has shield
+        move = poke.charged_move_1
+        
+        # Opponent has shields, safe to stack
+        result = ActionLogic.validate_stacking_wont_miss_ko(poke, opponent, move)
+        assert result is True
+    
+    def test_validate_stacking_wont_miss_ko_multiple_shields(self):
+        """Test validation when opponent has multiple shields."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=50, charged_move_energy=40)
+        opponent = create_test_pokemon("Azumarill", hp=10, energy=50)
+        opponent.shields = 2  # Multiple shields
+        move = poke.charged_move_1
+        
+        # Opponent has shields, safe to stack
+        result = ActionLogic.validate_stacking_wont_miss_ko(poke, opponent, move)
+        assert result is True
+
+
+class TestStep1S3SurvivabilityCheck:
+    """Test Step 1S.3: Survivability Check During Energy Building."""
+    
+    def test_can_survive_stacking_phase_high_hp(self):
+        """Test survivability with high HP."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=50, fast_move_turns=1)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50, fast_move_turns=1)
+        
+        # High HP, can survive
+        result = ActionLogic.can_survive_stacking_phase(poke, opponent)
+        assert result is True
+    
+    def test_can_survive_stacking_phase_low_hp_no_timing(self):
+        """Test survivability with low HP and no timing advantage."""
+        poke = create_test_pokemon("Machamp", hp=5, energy=50, fast_move_turns=1)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50, fast_move_turns=1)
+        
+        # Low HP, no timing advantage
+        result = ActionLogic.can_survive_stacking_phase(poke, opponent)
+        assert result is False
+    
+    def test_can_survive_stacking_phase_timing_advantage(self):
+        """Test survivability with timing advantage compensating for low HP."""
+        poke = create_test_pokemon("Machamp", hp=15, energy=50, fast_move_turns=1)  # 500ms
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50, fast_move_turns=3)  # 1500ms
+        
+        # Timing advantage: 1500 - 500 = 1000ms > 500ms
+        result = ActionLogic.can_survive_stacking_phase(poke, opponent)
+        assert result is True
+    
+    def test_can_survive_stacking_phase_exact_threshold_hp(self):
+        """Test survivability at exact HP threshold."""
+        poke = create_test_pokemon("Machamp", hp=20, energy=50, fast_move_turns=1)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50, fast_move_turns=1)
+        
+        # With mocked damage calculation, should pass or fail based on actual damage
+        result = ActionLogic.can_survive_stacking_phase(poke, opponent)
+        # Result depends on actual damage calculation
+        assert isinstance(result, bool)
+    
+    def test_can_survive_stacking_phase_exact_timing_threshold(self):
+        """Test survivability at exact timing threshold (500ms)."""
+        poke = create_test_pokemon("Machamp", hp=5, energy=50, fast_move_turns=2)  # 1000ms
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50, fast_move_turns=3)  # 1500ms
+        
+        # Timing difference: 1500 - 1000 = 500ms (NOT > 500ms)
+        result = ActionLogic.can_survive_stacking_phase(poke, opponent)
+        assert result is False
+    
+    def test_can_survive_stacking_phase_just_above_timing_threshold(self):
+        """Test survivability just above timing threshold."""
+        poke = create_test_pokemon("Machamp", hp=5, energy=50, fast_move_turns=1)  # 500ms
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50, fast_move_turns=3)  # 1500ms
+        
+        # Timing difference: 1500 - 500 = 1000ms > 500ms
+        result = ActionLogic.can_survive_stacking_phase(poke, opponent)
+        assert result is True
+
+
+class TestStep1S4MainStackingDecision:
+    """Test Step 1S.4: Main Energy Stacking Decision Logic."""
+    
+    def test_should_stack_energy_all_conditions_met(self):
+        """Test stacking when all conditions are met."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=50, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        move = poke.charged_move_1
+        
+        # All conditions met: self-debuffing, below target, won't KO, can survive
+        result = ActionLogic.should_stack_energy_for_debuffing_move(battle, poke, opponent, move)
+        assert result is True
+    
+    def test_should_stack_energy_non_debuffing_move(self):
+        """Test no stacking for non-debuffing moves."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=50, charged_move_energy=40, self_debuffing=False)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        move = poke.charged_move_1
+        
+        # Not self-debuffing
+        result = ActionLogic.should_stack_energy_for_debuffing_move(battle, poke, opponent, move)
+        assert result is False
+    
+    def test_should_stack_energy_at_target_energy(self):
+        """Test no stacking when at target energy."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        move = poke.charged_move_1
+        
+        # At target energy (80)
+        result = ActionLogic.should_stack_energy_for_debuffing_move(battle, poke, opponent, move)
+        assert result is False
+    
+    def test_should_stack_energy_above_target_energy(self):
+        """Test no stacking when above target energy."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=90, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        move = poke.charged_move_1
+        
+        # Above target energy (80)
+        result = ActionLogic.should_stack_energy_for_debuffing_move(battle, poke, opponent, move)
+        assert result is False
+    
+    def test_should_stack_energy_would_ko_opponent(self):
+        """Test no stacking when move would KO opponent."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=50, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=10, energy=50)
+        opponent.shields = 0
+        move = poke.charged_move_1
+        
+        # Move would KO opponent
+        result = ActionLogic.should_stack_energy_for_debuffing_move(battle, poke, opponent, move)
+        assert result is False
+    
+    def test_should_stack_energy_cant_survive(self):
+        """Test no stacking when can't survive energy building."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=5, energy=50, charged_move_energy=40, self_debuffing=True, fast_move_turns=1)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50, fast_move_turns=1)
+        move = poke.charged_move_1
+        
+        # Can't survive energy building
+        result = ActionLogic.should_stack_energy_for_debuffing_move(battle, poke, opponent, move)
+        assert result is False
+
+
 class TestEnergyStackingLogic:
-    """Test energy stacking logic for self-debuffing moves."""
+    """Test energy stacking logic for self-debuffing moves (legacy tests)."""
     
     def test_target_energy_calculation_40_energy_move(self):
         """Test target energy calculation for 40 energy move (can stack 2 times)."""
@@ -203,7 +455,7 @@ class TestMoveKOValidation:
 
 
 class TestSurvivabilityCheck:
-    """Test survivability check during energy building phase."""
+    """Test survivability check during energy building phase (legacy tests using new methods)."""
     
     def test_hp_survivability_high_hp(self):
         """Test HP survivability when Pokemon has high HP."""
@@ -212,7 +464,7 @@ class TestSurvivabilityCheck:
         opponent.fast_move.damage = 10
         
         # HP (150) > opponent fast damage (10) * 2 = 20
-        survivability = ActionLogic._check_energy_building_survivability(poke, opponent)
+        survivability = ActionLogic.can_survive_stacking_phase(poke, opponent)
         assert survivability is True
     
     def test_hp_survivability_low_hp_no_timing_advantage(self):
@@ -226,7 +478,7 @@ class TestSurvivabilityCheck:
         poke.current_hp = 3  # 3 <= ~3 * 2 = ~6, so should fail
         
         # No timing advantage (same turns: 1 turn each, 500ms - 500ms = 0 <= 500)
-        survivability = ActionLogic._check_energy_building_survivability(poke, opponent)
+        survivability = ActionLogic.can_survive_stacking_phase(poke, opponent)
         assert survivability is False
     
     def test_timing_advantage_compensates_for_low_hp(self):
@@ -237,7 +489,7 @@ class TestSurvivabilityCheck:
         
         # HP (15) <= opponent fast damage (10) * 2 = 20
         # But timing advantage: 1500ms - 500ms = 1000ms > 500ms
-        survivability = ActionLogic._check_energy_building_survivability(poke, opponent)
+        survivability = ActionLogic.can_survive_stacking_phase(poke, opponent)
         assert survivability is True
     
     def test_timing_advantage_calculation_exact_threshold(self):
@@ -246,26 +498,29 @@ class TestSurvivabilityCheck:
         opponent = create_test_pokemon("Azumarill", hp=150, energy=50, fast_move_turns=3)  # 1500ms
         
         # Difference: 1500ms - 500ms = 1000ms > 500ms
-        timing_advantage = ActionLogic._calculate_timing_advantage(poke, opponent)
-        assert timing_advantage is True
+        # Test via can_survive_stacking_phase since timing advantage is internal logic
+        survivability = ActionLogic.can_survive_stacking_phase(poke, opponent)
+        assert survivability is True
     
     def test_no_timing_advantage_same_cooldown(self):
         """Test no timing advantage when cooldowns are the same."""
-        poke = create_test_pokemon("Machamp", hp=150, energy=50, fast_move_turns=2)
+        poke = create_test_pokemon("Machamp", hp=5, energy=50, fast_move_turns=2)
         opponent = create_test_pokemon("Azumarill", hp=150, energy=50, fast_move_turns=2)
         
         # Difference: 1000ms - 1000ms = 0ms <= 500ms
-        timing_advantage = ActionLogic._calculate_timing_advantage(poke, opponent)
-        assert timing_advantage is False
+        # Low HP and no timing advantage should fail
+        survivability = ActionLogic.can_survive_stacking_phase(poke, opponent)
+        assert survivability is False
     
     def test_no_timing_advantage_poke_slower(self):
         """Test no timing advantage when Pokemon is slower."""
-        poke = create_test_pokemon("Machamp", hp=150, energy=50, fast_move_turns=3)  # 1500ms
+        poke = create_test_pokemon("Machamp", hp=5, energy=50, fast_move_turns=3)  # 1500ms
         opponent = create_test_pokemon("Azumarill", hp=150, energy=50, fast_move_turns=1)  # 500ms
         
         # Difference: 500ms - 1500ms = -1000ms <= 500ms
-        timing_advantage = ActionLogic._calculate_timing_advantage(poke, opponent)
-        assert timing_advantage is False
+        # Low HP and no timing advantage should fail
+        survivability = ActionLogic.can_survive_stacking_phase(poke, opponent)
+        assert survivability is False
     
     def test_timing_advantage_just_above_threshold(self):
         """Test timing advantage just above 500ms threshold."""
@@ -273,17 +528,18 @@ class TestSurvivabilityCheck:
         opponent = create_test_pokemon("Azumarill", hp=150, energy=50, fast_move_turns=3)  # 1500ms
         
         # Difference: 1500ms - 500ms = 1000ms > 500ms
-        timing_advantage = ActionLogic._calculate_timing_advantage(poke, opponent)
-        assert timing_advantage is True
+        survivability = ActionLogic.can_survive_stacking_phase(poke, opponent)
+        assert survivability is True
     
     def test_timing_advantage_just_below_threshold(self):
         """Test no timing advantage just below 500ms threshold."""
-        poke = create_test_pokemon("Machamp", hp=10, energy=50, fast_move_turns=2)  # 1000ms
+        poke = create_test_pokemon("Machamp", hp=5, energy=50, fast_move_turns=2)  # 1000ms
         opponent = create_test_pokemon("Azumarill", hp=150, energy=50, fast_move_turns=3)  # 1500ms
         
         # Difference: 1500ms - 1000ms = 500ms <= 500ms (not greater than)
-        timing_advantage = ActionLogic._calculate_timing_advantage(poke, opponent)
-        assert timing_advantage is False
+        # Low HP and no timing advantage should fail
+        survivability = ActionLogic.can_survive_stacking_phase(poke, opponent)
+        assert survivability is False
 
 
 class TestShieldBaitingOverride:

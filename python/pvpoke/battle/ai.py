@@ -2536,70 +2536,77 @@ class ActionLogic:
         return (poke.energy >= lowest_energy_move.energy_cost and 
                 getattr(lowest_energy_move, 'self_buffing', False))
 
-    # ========== ENERGY STACKING LOGIC FOR SELF-DEBUFFING MOVES (Step 1P) ==========
+    # ========== ENERGY STACKING LOGIC FOR SELF-DEBUFFING MOVES (Step 1S) ==========
     
     @staticmethod
-    def should_stack_self_debuffing_move(battle, poke: Pokemon, opponent: Pokemon, move: ChargedMove) -> bool:
+    def calculate_stacking_target_energy(move: ChargedMove) -> int:
         """
-        Determine if a self-debuffing move should be deferred to stack more energy.
+        Calculate the optimal energy level for stacking a self-debuffing move.
         
-        This implements the JavaScript logic from lines 918-935 of ActionLogic.js:
-        - Calculate target energy to stack multiple uses of the move
-        - Only defer if move won't KO opponent
-        - Only defer if Pokemon can survive the energy building phase
+        Formula: floor(100 / move.energy) * move.energy
+        
+        Examples:
+        - 35 energy move: floor(100/35) * 35 = 2 * 35 = 70 energy (2 uses)
+        - 40 energy move: floor(100/40) * 40 = 2 * 40 = 80 energy (2 uses)
+        - 45 energy move: floor(100/45) * 45 = 2 * 45 = 90 energy (2 uses)
+        - 50 energy move: floor(100/50) * 50 = 2 * 50 = 100 energy (2 uses)
+        - 55 energy move: floor(100/55) * 55 = 1 * 55 = 55 energy (1 use only)
         
         Args:
-            battle: Battle instance
-            poke: Current Pokemon with the debuffing move
+            move: The self-debuffing move to calculate target energy for
+            
+        Returns:
+            Target energy level for optimal stacking
+        """
+        if move.energy_cost <= 0:
+            return 0
+        
+        # Calculate maximum number of times the move can be used with 100 energy
+        max_uses = math.floor(100 / move.energy_cost)
+        
+        # Calculate target energy that allows for max_uses
+        target_energy = max_uses * move.energy_cost
+        
+        return target_energy
+    
+    @staticmethod
+    def validate_stacking_wont_miss_ko(poke: Pokemon, opponent: Pokemon, move: ChargedMove) -> bool:
+        """
+        Validate that stacking won't cause us to miss a KO opportunity.
+        
+        Don't stack if:
+        - Move would KO opponent (no shields)
+        - Opponent has no shields and low HP
+        
+        Args:
+            poke: Current Pokemon
             opponent: Opponent Pokemon
             move: The self-debuffing move being considered
             
         Returns:
-            True if move should be deferred to build more energy, False otherwise
+            True if safe to stack (won't miss KO), False if should use move now
         """
-        # Only apply to self-debuffing moves
-        if not getattr(move, 'self_debuffing', False):
-            return False
-        
-        # Calculate target energy for optimal stacking
-        # JavaScript: let targetEnergy = Math.floor(100 / finalState.moves[0].energy) * finalState.moves[0].energy;
-        target_energy = math.floor(100 / move.energy_cost) * move.energy_cost
-        
-        # Only defer if we haven't reached target energy yet
-        if poke.energy >= target_energy:
-            return False
-        
-        # Check if move would KO opponent
+        # Calculate move damage
         move_damage = DamageCalculator.calculate_damage(poke, opponent, move)
         
-        # Don't defer if move would KO (and opponent has no shields)
-        # JavaScript: if ((opponent.hp > moveDamage || opponent.shields != 0) && ...)
+        # Don't stack if move would KO opponent (no shields)
         if opponent.current_hp <= move_damage and opponent.shields == 0:
             return False
         
-        # Check survivability during energy building phase
-        # JavaScript: (poke.hp > opponent.fastMove.damage * 2 || opponent.fastMove.cooldown - poke.fastMove.cooldown > 500)
-        survivability_check = ActionLogic._check_energy_building_survivability(poke, opponent)
-        
-        if survivability_check:
-            # Log the decision
-            stack_count = math.floor(100 / move.energy_cost)
-            ActionLogic._log_decision(
-                battle, poke, 
-                f" doesn't use {move.move_id} because it wants to minimize time debuffed and it can stack the move {stack_count} times"
-            )
+        # Safe to stack if opponent has shields or HP > damage
+        if opponent.current_hp > move_damage or opponent.shields > 0:
             return True
         
         return False
     
     @staticmethod
-    def _check_energy_building_survivability(poke: Pokemon, opponent: Pokemon) -> bool:
+    def can_survive_stacking_phase(poke: Pokemon, opponent: Pokemon) -> bool:
         """
         Check if Pokemon can survive while building energy for stacking.
         
         Two conditions for survivability:
-        1. Pokemon HP is high enough to tank fast moves (> opponent.fastMove.damage * 2)
-        2. Pokemon has timing advantage (opponent cooldown - poke cooldown > 500ms)
+        1. HP > opponent fast move damage * 2 (can survive at least 2 fast moves)
+        2. OR has significant timing advantage (cooldown difference > 500ms)
         
         Args:
             poke: Current Pokemon
@@ -2611,38 +2618,90 @@ class ActionLogic:
         # Get fast move damage
         opp_fast_damage = DamageCalculator.calculate_damage(opponent, poke, opponent.fast_move)
         
-        # Check HP survivability: can tank at least 2 fast moves
-        hp_survivability = poke.current_hp > opp_fast_damage * 2
+        # Condition 1: Can survive at least 2 opponent fast moves
+        if poke.current_hp > opp_fast_damage * 2:
+            return True
         
-        # Check timing advantage: opponent's fast move is significantly slower
-        timing_advantage = ActionLogic._calculate_timing_advantage(poke, opponent)
+        # Condition 2: Has significant timing advantage
+        # Get cooldowns from fast moves (convert turns to milliseconds)
+        poke_cooldown = poke.fast_move.turns * 500
+        opp_cooldown = opponent.fast_move.turns * 500
+        cooldown_advantage = opp_cooldown - poke_cooldown
         
-        # Return true if either condition is met
-        return hp_survivability or timing_advantage
+        if cooldown_advantage > 500:
+            return True
+        
+        return False
     
     @staticmethod
-    def _calculate_timing_advantage(poke: Pokemon, opponent: Pokemon) -> bool:
+    def should_stack_energy_for_debuffing_move(battle, poke: Pokemon, opponent: Pokemon, move: ChargedMove) -> bool:
         """
-        Calculate if Pokemon has timing advantage for energy building.
+        Determine if Pokemon should build energy to stack a self-debuffing move.
         
-        Timing advantage exists when opponent's fast move is significantly slower,
-        allowing Pokemon to build energy while taking fewer hits.
+        Stacking conditions (ALL must be true):
+        1. Move is self-debuffing
+        2. Current energy < target energy
+        3. Move won't KO opponent (or opponent has shields)
+        4. Pokemon can survive the energy building phase
         
         Args:
+            battle: Battle instance
             poke: Current Pokemon
             opponent: Opponent Pokemon
+            move: The self-debuffing move being considered
             
         Returns:
-            True if timing advantage exists (cooldown difference > 500ms)
+            True if should build energy (don't use move yet), False if should use move now
         """
-        # Get cooldowns from fast moves
-        poke_cooldown = poke.fast_move.turns * 500  # Convert turns to milliseconds
-        opp_cooldown = opponent.fast_move.turns * 500
+        # Only apply to self-debuffing moves
+        if not getattr(move, 'self_debuffing', False):
+            return False
         
-        # JavaScript: opponent.fastMove.cooldown - poke.fastMove.cooldown > 500
-        cooldown_difference = opp_cooldown - poke_cooldown
+        # Calculate target energy for stacking
+        target_energy = ActionLogic.calculate_stacking_target_energy(move)
         
-        return cooldown_difference > 500
+        # Don't stack if already at or above target energy
+        if poke.energy >= target_energy:
+            return False
+        
+        # Don't stack if move would KO opponent
+        if not ActionLogic.validate_stacking_wont_miss_ko(poke, opponent, move):
+            return False
+        
+        # Don't stack if Pokemon can't survive the energy building phase
+        if not ActionLogic.can_survive_stacking_phase(poke, opponent):
+            return False
+        
+        # All conditions met - should build energy for stacking
+        return True
+    
+    @staticmethod
+    def should_stack_self_debuffing_move(battle, poke: Pokemon, opponent: Pokemon, move: ChargedMove) -> bool:
+        """
+        Legacy wrapper for should_stack_energy_for_debuffing_move.
+        
+        This method maintains backward compatibility with existing code.
+        
+        Args:
+            battle: Battle instance
+            poke: Current Pokemon with the debuffing move
+            opponent: Opponent Pokemon
+            move: The self-debuffing move being considered
+            
+        Returns:
+            True if move should be deferred to build more energy, False otherwise
+        """
+        should_stack = ActionLogic.should_stack_energy_for_debuffing_move(battle, poke, opponent, move)
+        
+        if should_stack:
+            # Log the decision
+            max_uses = math.floor(100 / move.energy_cost)
+            ActionLogic._log_decision(
+                battle, poke, 
+                f" doesn't use {move.move_id} because it wants to minimize time debuffed and it can stack the move {max_uses} times"
+            )
+        
+        return should_stack
     
     @staticmethod
     def should_override_with_bait_move(battle, poke: Pokemon, opponent: Pokemon, 
