@@ -222,12 +222,14 @@ The Python `decide_action` method now has **comprehensive implementation** of th
         - ✅ Shield→Blade: Replace AEGISLASH_CHARGE_* with normal moves
         - ✅ Blade→Shield: Replace normal moves with AEGISLASH_CHARGE_*
         - ✅ Add form change move replacement tests (test_aegislash_move_replacement.py - 19 tests, all passing)
-    - Step 1AA: Port Aegislash Form Stats Calculation
-        - Port getFormStats level adjustment logic (Pokemon.js lines 2400-2419)
-        - Implement CP-specific level scaling for form changes
-        - CP 1500: Blade = ceil(Shield level * 0.5) + 1
-        - CP 2500: Blade = ceil(Shield level * 0.75)
-        - Add form stats calculation tests
+    - ✅ Step 1AA: Port Aegislash Form Stats Calculation (COMPLETED)
+        - ✅ Port getFormStats level adjustment logic (Pokemon.js lines 2391-2448)
+        - ✅ Implement CP-specific level scaling for form changes
+        - ✅ CP 1500: Blade = ceil(Shield level * 0.5) + 1, Shield = (Blade level / 0.5) + 2
+        - ✅ CP 2500: Blade = ceil(Shield level * 0.75), Shield = round(Blade level / 0.75)
+        - ✅ Port CP cap enforcement loop (Pokemon.js lines 2430-2445)
+        - ✅ Add _calculate_cp_by_base_stats helper method (Pokemon.js lines 394-398)
+        - ✅ Add form stats calculation tests (test_aegislash_form_stats.py - 22 tests, all passing)
     - Step 1AB: Port Aegislash Ranking Special Cases
         - Port ranking moveset override (Ranker.js lines 524-526)
         - Set moveset[0] to "AEGISLASH_CHARGE_PSYCHO_CUT" for Shield form
