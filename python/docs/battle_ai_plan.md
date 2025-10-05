@@ -217,11 +217,11 @@ The Python `decide_action` method now has **comprehensive implementation** of th
         - ✅ Mark all charged moves as self-debuffing with [0,0] buffs
         - ✅ Set buffTarget to self for all charged moves
         - ✅ Add move initialization tests (test_aegislash_move_initialization.py - 11 tests, all passing)
-    - Step 1Z: Port Aegislash Form Change Move Replacement
-        - Port fast move replacement on form change (Pokemon.js lines 2375-2383)
-        - Shield→Blade: Replace AEGISLASH_CHARGE_* with normal moves
-        - Blade→Shield: Replace normal moves with AEGISLASH_CHARGE_*
-        - Add form change move replacement tests
+    - ✅ Step 1Z: Port Aegislash Form Change Move Replacement (COMPLETED)
+        - ✅ Port fast move replacement on form change (Pokemon.js lines 2375-2383)
+        - ✅ Shield→Blade: Replace AEGISLASH_CHARGE_* with normal moves
+        - ✅ Blade→Shield: Replace normal moves with AEGISLASH_CHARGE_*
+        - ✅ Add form change move replacement tests (test_aegislash_move_replacement.py - 19 tests, all passing)
     - Step 1AA: Port Aegislash Form Stats Calculation
         - Port getFormStats level adjustment logic (Pokemon.js lines 2400-2419)
         - Implement CP-specific level scaling for form changes

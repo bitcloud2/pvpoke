@@ -331,5 +331,122 @@ class Pokemon:
         
         return Stats(atk=atk, defense=defense, hp=hp)
     
+    def replace_move(self, move_type: str, old_move_id: str, new_move_id: str):
+        """
+        Replace a move with another move by ID.
+        
+        Used during form changes to swap moves (e.g., Aegislash changing between
+        AEGISLASH_CHARGE_* moves and regular moves).
+        
+        JavaScript Reference (Pokemon.js lines 2450-2461):
+        this.replaceMove = function(moveType, oldMoveId, newMoveId){
+            if(moveType == "fast"){
+                if(self.fastMove.moveId == oldMoveId){
+                    self.selectMove(moveType, newMoveId, 0, true);
+                }
+            } else if(moveType == "charged"){
+                var moveIndex = self.chargedMoves.findIndex(m => m.moveId == oldMoveId);
+                if(moveIndex > -1){
+                    self.selectMove(moveType, newMoveId, moveIndex, true);
+                }
+            }
+        }
+        
+        Args:
+            move_type: "fast" or "charged"
+            old_move_id: ID of move to replace
+            new_move_id: ID of new move
+        """
+        from .gamemaster import GameMaster
+        
+        gm = GameMaster()
+        
+        if move_type == "fast":
+            # Replace fast move if it matches
+            if self.fast_move and self.fast_move.move_id == old_move_id:
+                new_move = gm.get_fast_move(new_move_id)
+                if new_move:
+                    self.fast_move = new_move
+        
+        elif move_type == "charged":
+            # Replace charged move if it matches
+            if self.charged_move_1 and self.charged_move_1.move_id == old_move_id:
+                new_move = gm.get_charged_move(new_move_id)
+                if new_move:
+                    self.charged_move_1 = new_move
+            
+            if self.charged_move_2 and self.charged_move_2.move_id == old_move_id:
+                new_move = gm.get_charged_move(new_move_id)
+                if new_move:
+                    self.charged_move_2 = new_move
+    
+    def change_form(self, form_id: str, battle_cp: Optional[int] = None):
+        """
+        Change Pokemon to a different form and update stats/moves accordingly.
+        
+        Handles form-specific functionality like move replacements for Aegislash.
+        
+        JavaScript Reference (Pokemon.js lines 2344-2387):
+        this.changeForm = function(formId){
+            // Update stats
+            let newStats = self.getFormStats(formId);
+            self.stats.atk = newStats.atk;
+            self.stats.def = newStats.def;
+            
+            // Form specific functionality
+            switch(formId){
+                case "aegislash_blade":
+                    self.replaceMove("fast", "AEGISLASH_CHARGE_AIR_SLASH", "AIR_SLASH");
+                    self.replaceMove("fast", "AEGISLASH_CHARGE_PSYCHO_CUT", "PSYCHO_CUT");
+                    break;
+                
+                case "aegislash_shield":
+                    self.replaceMove("fast", "AIR_SLASH", "AEGISLASH_CHARGE_AIR_SLASH");
+                    self.replaceMove("fast", "PSYCHO_CUT", "AEGISLASH_CHARGE_PSYCHO_CUT");
+                    break;
+            }
+            
+            self.resetMoves();
+        }
+        
+        Args:
+            form_id: Species ID of the new form (e.g., "aegislash_blade")
+            battle_cp: Battle CP limit for form-specific level adjustments
+        """
+        from .gamemaster import GameMaster
+        
+        # Update active form ID
+        self.active_form_id = form_id
+        
+        # Get new stats for the form
+        new_stats = self.get_form_stats(form_id, battle_cp)
+        
+        # Update stats (but not HP - HP remains the same during form changes)
+        self.base_stats.atk = new_stats.atk
+        self.base_stats.defense = new_stats.defense
+        
+        # Form-specific move replacements
+        if form_id == "aegislash_blade":
+            # Shield -> Blade: Replace AEGISLASH_CHARGE_* with normal moves
+            self.replace_move("fast", "AEGISLASH_CHARGE_AIR_SLASH", "AIR_SLASH")
+            self.replace_move("fast", "AEGISLASH_CHARGE_PSYCHO_CUT", "PSYCHO_CUT")
+        
+        elif form_id == "aegislash_shield":
+            # Blade -> Shield: Replace normal moves with AEGISLASH_CHARGE_*
+            self.replace_move("fast", "AIR_SLASH", "AEGISLASH_CHARGE_AIR_SLASH")
+            self.replace_move("fast", "PSYCHO_CUT", "AEGISLASH_CHARGE_PSYCHO_CUT")
+        
+        elif form_id == "morpeko_full_belly":
+            # Morpeko Hangry -> Full Belly: Replace Dark Aura Wheel with Electric
+            self.replace_move("charged", "AURA_WHEEL_DARK", "AURA_WHEEL_ELECTRIC")
+        
+        elif form_id == "morpeko_hangry":
+            # Morpeko Full Belly -> Hangry: Replace Electric Aura Wheel with Dark
+            self.replace_move("charged", "AURA_WHEEL_ELECTRIC", "AURA_WHEEL_DARK")
+        
+        # Reinitialize moves if needed (e.g., Aegislash Shield form self-debuffing)
+        if form_id == "aegislash_shield":
+            self.initialize_aegislash_moves()
+    
     def __repr__(self):
         return f"Pokemon(species={self.species_name}, cp={self.cp}, level={self.level}, ivs={self.ivs})"
