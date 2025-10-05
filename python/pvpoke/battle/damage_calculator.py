@@ -145,6 +145,11 @@ class DamageCalculator:
         damage = DamageCalculator.calculate_damage(attacker, defender, fast_move)
         energy_gain = fast_move.energy_gain
         
+        # Aegislash Shield form energy gain override (Step 1W)
+        # Hard code to apply to custom moves - Shield form gets 6 energy per fast move
+        if attacker.active_form_id == "aegislash_shield":
+            energy_gain = 6
+        
         return damage, energy_gain
     
     @staticmethod

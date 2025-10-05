@@ -203,11 +203,11 @@ The Python `decide_action` method now has **comprehensive implementation** of th
         - ✅ Implement get_form_stats method in Pokemon class (Pokemon.js lines 2391-2464)
         - ✅ Add battle_cp parameter to damage calculations for form-specific level adjustments
         - ✅ Add form-specific damage calculation tests (test_aegislash_damage_override.py - 15 tests, all passing)
-    - Step 1W: Port Aegislash Energy Gain Override
-        - Port Shield form custom energy gain for fast moves (Battle.js lines 1278-1280)
-        - Port Shield form energy gain override for timeline events (Battle.js lines 1464-1466)
-        - Ensure energy gain is set to 6 for Shield form fast moves
-        - Add energy gain override tests
+    - ✅ Step 1W: Port Aegislash Energy Gain Override (COMPLETED)
+        - ✅ Port Shield form custom energy gain for fast moves (Battle.js lines 1278-1280)
+        - ✅ Port Shield form energy gain override for timeline events (Battle.js lines 1464-1466)
+        - ✅ Ensure energy gain is set to 6 for Shield form fast moves
+        - ✅ Add energy gain override tests (test_aegislash_energy_gain.py - 13 tests, all passing)
     - Step 1X: Port Aegislash Shield Decision Override
         - Port Shield form shield usage logic (Battle.js lines 1120-1122)
         - Implement "don't shield if damage * 2 < HP" rule
