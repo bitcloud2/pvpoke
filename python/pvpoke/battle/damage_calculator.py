@@ -17,7 +17,8 @@ class DamageCalculator:
     
     @staticmethod
     def calculate_damage(attacker: Pokemon, defender: Pokemon, move: Move, 
-                        charge: float = 1.0, use_effective_stats: bool = True) -> int:
+                        charge: float = 1.0, use_effective_stats: bool = True,
+                        battle_cp: Optional[int] = None) -> int:
         """
         Calculate damage for a move.
         
@@ -27,6 +28,7 @@ class DamageCalculator:
             move: Move being used
             charge: Charge percentage for charged moves (0-1)
             use_effective_stats: Whether to use buffed stats
+            battle_cp: Battle CP limit for form-specific calculations (e.g., 1500, 2500)
             
         Returns:
             Damage dealt (minimum 1)
@@ -40,6 +42,29 @@ class DamageCalculator:
             defender_stats = defender.calculate_stats()
             attack = attacker_stats.atk
             defense = defender_stats.defense
+        
+        # Aegislash Shield form special case: Use Blade form attack for charged moves
+        # JavaScript Reference (DamageCalculator.js lines 41-48):
+        # switch(attacker.activeFormId){
+        #     case "aegislash_shield":
+        #         if(move.energy > 0){
+        #             attackStat = attacker.getFormStats("aegislash_blade").atk;
+        #         }
+        #         break;
+        # }
+        if (hasattr(attacker, 'active_form_id') and 
+            attacker.active_form_id == "aegislash_shield" and
+            isinstance(move, ChargedMove)):
+            # Use Blade form's attack stat for charged moves
+            blade_stats = attacker.get_form_stats("aegislash_blade", battle_cp)
+            attack = blade_stats.atk
+            
+            # Apply stat buffs if using effective stats
+            if use_effective_stats and attacker.stat_buffs[0] != 0:
+                buff_multipliers = [0.5, 0.5714, 0.6667, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0]
+                buff_value = int(attacker.stat_buffs[0]) + 4
+                buff_value = max(0, min(8, buff_value))
+                attack = attack * buff_multipliers[buff_value]
         
         # Get type effectiveness
         effectiveness = TypeEffectiveness.get_effectiveness(
@@ -58,6 +83,20 @@ class DamageCalculator:
             0.5 * move.power * attack / defense * stab * effectiveness * 
             charge_multiplier * DamageCalculator.BONUS_MULTIPLIER
         ) + 1
+        
+        # Aegislash Shield form special case: Fast moves always do 1 damage
+        # JavaScript Reference (DamageCalculator.js lines 53-60, 76-83):
+        # switch(attacker.activeFormId){
+        #     case "aegislash_shield":
+        #         if(move.energyGain > 0){
+        #             damage = 1;
+        #         }
+        #         break;
+        # }
+        if (hasattr(attacker, 'active_form_id') and 
+            attacker.active_form_id == "aegislash_shield" and
+            isinstance(move, FastMove)):
+            damage = 1
         
         return max(1, damage)  # Minimum damage is 1
     
@@ -193,9 +232,30 @@ class DamageCalculator:
     
     @staticmethod
     def calculate_damage_from_stats(attack: float, defense: float, power: int,
-                                    effectiveness: float = 1.0, stab: float = 1.0) -> int:
+                                    effectiveness: float = 1.0, stab: float = 1.0,
+                                    attacker: Optional[Pokemon] = None,
+                                    move: Optional[Move] = None,
+                                    battle_cp: Optional[int] = None) -> int:
         """
         Calculate damage from raw stats (for testing/analysis).
+        
+        JavaScript Reference (DamageCalculator.js lines 67-86):
+        static damageByStats(attacker, defender, attack, defense, effectiveness, move){
+            // For Pokemon which change forms before a charged attack, use the new form's attack stat
+            if(attacker.formChange && attacker.formChange.trigger == "activate_charged" && move.energy > 0){
+                attack = attacker.getFormStats(attacker.formChange.alternativeFormId).atk;
+            }
+            var damage = Math.floor(move.power * move.stab * (attack/defense) * effectiveness * 0.5 * DamageMultiplier.BONUS) + 1;
+            // Form specific special cases
+            switch(attacker.activeFormId){
+                case "aegislash_shield":
+                    if(move.energyGain > 0){
+                        damage = 1;
+                    }
+                    break;
+            }
+            return damage;
+        }
         
         Args:
             attack: Attack stat
@@ -203,13 +263,31 @@ class DamageCalculator:
             power: Move power
             effectiveness: Type effectiveness multiplier
             stab: STAB multiplier
+            attacker: Optional attacker Pokemon for form-specific logic
+            move: Optional move for form-specific logic
+            battle_cp: Battle CP limit for form-specific calculations
             
         Returns:
             Damage dealt (minimum 1)
         """
+        # Aegislash Shield form: Use Blade form attack for charged moves
+        if (attacker and move and 
+            hasattr(attacker, 'active_form_id') and 
+            attacker.active_form_id == "aegislash_shield" and
+            isinstance(move, ChargedMove)):
+            blade_stats = attacker.get_form_stats("aegislash_blade", battle_cp)
+            attack = blade_stats.atk
+        
         damage = math.floor(
             0.5 * power * attack / defense * stab * effectiveness * 
             DamageCalculator.BONUS_MULTIPLIER
         ) + 1
+        
+        # Aegislash Shield form: Fast moves always do 1 damage
+        if (attacker and move and
+            hasattr(attacker, 'active_form_id') and 
+            attacker.active_form_id == "aegislash_shield" and
+            isinstance(move, FastMove)):
+            damage = 1
         
         return max(1, damage)

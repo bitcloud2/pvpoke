@@ -232,5 +232,76 @@ class Pokemon:
         
         return base_stat * buff_multipliers[buff_value]
     
+    def get_form_stats(self, form_id: str, battle_cp: Optional[int] = None) -> Stats:
+        """
+        Get stats for an alternative form of this Pokemon.
+        
+        Used for Pokemon with form changes like Aegislash to calculate stats
+        in their alternative form while maintaining the same IVs and adjusted level.
+        
+        JavaScript Reference (Pokemon.js lines 2391-2464):
+        this.getFormStats = function(formId){
+            let newForm = gm.getPokemonById(formId);
+            let newLevel = self.level;
+            // Form specific cases for Aegislash with level adjustments
+        }
+        
+        Args:
+            form_id: Species ID of the alternative form (e.g., "aegislash_blade")
+            battle_cp: Battle CP limit (1500, 2500, etc.) for form-specific level adjustments
+            
+        Returns:
+            Stats object with the alternative form's stats
+        """
+        from .gamemaster import GameMaster
+        
+        # Get the alternative form's base stats
+        try:
+            gm = GameMaster()
+            alt_form = gm.get_pokemon(form_id)
+        except (FileNotFoundError, Exception):
+            # If GameMaster not available, return current stats
+            alt_form = None
+        
+        if not alt_form:
+            # If form not found, return current stats
+            return self.calculate_stats()
+        
+        # Start with current level
+        new_level = self.level
+        
+        # Apply form-specific level adjustments (primarily for Aegislash)
+        if self.species_id != form_id:
+            # Aegislash Blade form (Shield -> Blade)
+            if form_id == "aegislash_blade":
+                if battle_cp == 1500:
+                    # Great League: Blade level = ceil(Shield level * 0.5) + 1
+                    new_level = math.ceil(self.level * 0.5) + 1
+                elif battle_cp == 2500:
+                    # Ultra League: Blade level = ceil(Shield level * 0.75)
+                    new_level = math.ceil(self.level * 0.75)
+            
+            # Aegislash Shield form (Blade -> Shield)
+            elif form_id == "aegislash_shield":
+                if battle_cp == 1500:
+                    # Great League: Shield level = (Blade level / 0.5) + 2
+                    new_level = (self.level / 0.5) + 2
+                elif battle_cp == 2500:
+                    # Ultra League: Shield level = round(Blade level / 0.75)
+                    new_level = round(self.level / 0.75)
+        
+        # Calculate stats using alternative form's base stats with current IVs and adjusted level
+        cpm = self.get_cpm(new_level)
+        
+        # Apply shadow multipliers if this Pokemon is shadow
+        shadow_atk_mult = 1.2 if self.shadow_type == "shadow" else 1.0
+        shadow_def_mult = 0.833333 if self.shadow_type == "shadow" else 1.0
+        
+        atk = (alt_form.base_stats.atk + self.ivs.atk) * cpm * shadow_atk_mult
+        defense = (alt_form.base_stats.defense + self.ivs.defense) * cpm * shadow_def_mult
+        hp = math.floor((alt_form.base_stats.hp + self.ivs.hp) * cpm)
+        
+        return Stats(atk=atk, defense=defense, hp=hp)
+    
     def __repr__(self):
         return f"Pokemon(species={self.species_name}, cp={self.cp}, level={self.level}, ivs={self.ivs})"

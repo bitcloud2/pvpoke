@@ -190,7 +190,49 @@ The Python `decide_action` method now has **comprehensive implementation** of th
         -  ✅ Add self-buffing move prioritization during baiting
         -  ✅ Add opponent shield prediction for move swapping
         -  ✅ Add comprehensive test coverage for integrated baiting override
-- **Aegislash Form Logic**: Special handling for form changes (lines 957-966 in JS)
+- **Aegislash Form Logic**: Special handling for form changes (lines 957-966 in ActionLogic.js, plus damage/energy handling in Battle.js and DamageCalculator.js)
+    - ✅ Step 1U: Implement Aegislash Energy Building Logic (COMPLETED - lines 2902-2972 in ai.py)
+        - ✅ Add energy threshold calculation (100 - fastMove.energyGain / 2)
+        - ✅ Implement mode-specific validation (simulate vs emulate)
+        - ✅ Add best charged move damage check for simulate mode
+        - ✅ Integrate with decide_action method (lines 612, 663)
+        - ✅ Add comprehensive test coverage (test_aegislash_form_change.py - 432 lines, all passing)
+    - ✅ Step 1V: Port Aegislash Damage Calculation Override (COMPLETED)
+        - ✅ Port Shield form fast move damage override (DamageCalculator.js lines 54-60, 76-83)
+        - ✅ Port Shield form charged move damage calculation using Blade form attack (DamageCalculator.js lines 42-48)
+        - ✅ Implement get_form_stats method in Pokemon class (Pokemon.js lines 2391-2464)
+        - ✅ Add battle_cp parameter to damage calculations for form-specific level adjustments
+        - ✅ Add form-specific damage calculation tests (test_aegislash_damage_override.py - 15 tests, all passing)
+    - Step 1W: Port Aegislash Energy Gain Override
+        - Port Shield form custom energy gain for fast moves (Battle.js lines 1278-1280)
+        - Port Shield form energy gain override for timeline events (Battle.js lines 1464-1466)
+        - Ensure energy gain is set to 6 for Shield form fast moves
+        - Add energy gain override tests
+    - Step 1X: Port Aegislash Shield Decision Override
+        - Port Shield form shield usage logic (Battle.js lines 1120-1122)
+        - Implement "don't shield if damage * 2 < HP" rule
+        - Add shield decision override tests
+    - Step 1Y: Port Aegislash Move Initialization Logic
+        - Port Shield form charged move self-debuffing flag (Pokemon.js lines 745-751)
+        - Mark all charged moves as self-debuffing with [0,0] buffs
+        - Set buffTarget to self for all charged moves
+        - Add move initialization tests
+    - Step 1Z: Port Aegislash Form Change Move Replacement
+        - Port fast move replacement on form change (Pokemon.js lines 2375-2383)
+        - Shield→Blade: Replace AEGISLASH_CHARGE_* with normal moves
+        - Blade→Shield: Replace normal moves with AEGISLASH_CHARGE_*
+        - Add form change move replacement tests
+    - Step 1AA: Port Aegislash Form Stats Calculation
+        - Port getFormStats level adjustment logic (Pokemon.js lines 2400-2419)
+        - Implement CP-specific level scaling for form changes
+        - CP 1500: Blade = ceil(Shield level * 0.5) + 1
+        - CP 2500: Blade = ceil(Shield level * 0.75)
+        - Add form stats calculation tests
+    - Step 1AB: Port Aegislash Ranking Special Cases
+        - Port ranking moveset override (Ranker.js lines 524-526)
+        - Set moveset[0] to "AEGISLASH_CHARGE_PSYCHO_CUT" for Shield form
+        - Port shield pressure trait logic (Pokemon.js line 1473)
+        - Add ranking special case tests
 
 ### **2. MISSING SUPPORTING CLASSES**
 The Python implementation lacks the `DecisionOption` class:
