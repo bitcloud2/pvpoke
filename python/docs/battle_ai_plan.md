@@ -97,6 +97,26 @@ The Python `decide_action` method is only **partially implemented** (lines 270-2
         - ⏳ Add comprehensive testing for all baiting scenarios
         - ⏳ Validate against JavaScript behavior
 - **Self-Debuffing Move Handling**: Special logic for moves like Superpower (lines 918-935 in JS)
+    - ✅ Step 1O: Implement Self-Debuffing Move Deferral Logic (COMPLETED)
+        - ✅ Add logic to defer self-debuffing moves when opponent has lethal charged move ready
+        - ✅ Implement survivability check for opponent's best charged move
+        - ✅ Add shield consideration for deferral decisions
+        - ✅ Add self-buffing move exception handling
+    - ⏳ Step 1P: Add Energy Stacking Logic for Self-Debuffing Moves
+        - ⏳ Implement target energy calculation for optimal stacking
+        - ⏳ Add move damage vs opponent HP validation
+        - ⏳ Add survivability check during energy building phase
+        - ⏳ Add timing advantage calculation (cooldown differences)
+    - ⏳ Step 1Q: Implement Shield Baiting Override for Self-Debuffing Moves
+        - ⏳ Add close energy cost comparison logic (within 10 energy)
+        - ⏳ Implement preference for non-debuffing moves when baiting
+        - ⏳ Add self-buffing move prioritization during baiting
+        - ⏳ Add opponent shield prediction for move swapping
+    - ⏳ Step 1R: Add Aegislash Form Change Logic
+        - ⏳ Implement energy building logic for Aegislash Shield form
+        - ⏳ Add form-specific energy thresholds
+        - ⏳ Add battle mode consideration (simulate vs emulate)
+        - ⏳ Add damage threshold checks for form optimization
 - **Energy Stacking**: Logic to stack multiple uses of debuffing moves (lines 919-935 in JS)
 - **Aegislash Form Logic**: Special handling for form changes (lines 957-966 in JS)
 
@@ -1345,6 +1365,491 @@ def test_self_debuffing_avoidance():
 - Use early returns when baiting conditions aren't met
 - Consider disabling complex baiting logic in fast simulation modes
 
+## Self-Debuffing Move Handling - Detailed Implementation Plan
+
+### Overview
+Self-Debuffing Move Handling is a sophisticated AI system that manages moves with negative stat effects on the user (like Superpower, Close Combat, Overheat). The system implements strategic timing to minimize the negative impact of debuffs while maximizing damage output through energy stacking and optimal usage patterns.
+
+### Core Concept
+- **Self-Debuffing Moves**: Moves that reduce the user's attack or defense stats after use
+- **Energy Stacking**: Building energy to use multiple debuffing moves in succession to minimize debuff duration
+- **Deferral Logic**: Delaying debuffing moves when opponent has lethal moves ready
+- **Baiting Override**: Preferring non-debuffing moves for shield baiting when available
+
+### Step 1O: Self-Debuffing Move Deferral Logic
+
+#### 1O.1: Basic Deferral Conditions
+```python
+def should_defer_self_debuffing_move(self, poke: Pokemon, opponent: Pokemon, move: Move) -> bool:
+    """
+    Determine if a self-debuffing move should be deferred due to opponent threats.
+    
+    Args:
+        poke: Current Pokemon with the debuffing move
+        opponent: Opponent Pokemon
+        move: The self-debuffing move being considered
+        
+    Returns:
+        True if move should be deferred, False otherwise
+    """
+    # Only apply to self-debuffing moves
+    if not getattr(move, 'self_debuffing', False):
+        return False
+    
+    # Don't defer if Pokemon has no shields and low energy
+    if poke.shields == 0 and poke.energy < 100:
+        # Check if opponent has a lethal charged move ready
+        if hasattr(opponent, 'best_charged_move') and opponent.best_charged_move:
+            if opponent.energy >= opponent.best_charged_move.energy_cost:
+                # Check if opponent would use the move (not shield it)
+                shield_decision = self.would_shield(opponent, poke, opponent.best_charged_move)
+                if not shield_decision['value']:
+                    # Exception: Don't defer if our move is self-buffing
+                    if not getattr(poke.active_charged_moves[0], 'self_buffing', False):
+                        return True
+    
+    return False
+```
+
+#### 1O.2: Survivability Assessment
+```python
+def assess_survivability_against_opponent_move(self, poke: Pokemon, opponent: Pokemon) -> bool:
+    """
+    Assess if Pokemon can survive opponent's best charged move.
+    
+    Returns:
+        True if Pokemon can survive, False if move would be lethal
+    """
+    if not hasattr(opponent, 'best_charged_move') or not opponent.best_charged_move:
+        return True
+    
+    # Calculate damage from opponent's best move
+    move_damage = DamageCalculator.calculate_damage(opponent, poke, opponent.best_charged_move)
+    
+    # Account for shields
+    if poke.shields > 0:
+        move_damage = 1  # Shields reduce charged move damage to 1
+    
+    # Check if Pokemon survives
+    return poke.current_hp > move_damage
+```
+
+#### 1O.3: Self-Buffing Move Exception Logic
+```python
+def has_self_buffing_exception(self, poke: Pokemon) -> bool:
+    """
+    Check if Pokemon has a self-buffing move that overrides deferral logic.
+    
+    Self-buffing moves are valuable enough to use even when opponent has threats.
+    """
+    if not poke.active_charged_moves:
+        return False
+    
+    # Check if the lowest energy move is self-buffing
+    lowest_energy_move = min(poke.active_charged_moves, key=lambda m: m.energy_cost)
+    
+    return (poke.energy >= lowest_energy_move.energy_cost and 
+            getattr(lowest_energy_move, 'self_buffing', False))
+```
+
+### Step 1P: Energy Stacking Logic for Self-Debuffing Moves
+
+#### 1P.1: Target Energy Calculation
+```python
+def calculate_target_energy_for_stacking(self, move: Move) -> int:
+    """
+    Calculate the optimal energy level for stacking self-debuffing moves.
+    
+    Args:
+        move: The self-debuffing move to stack
+        
+    Returns:
+        Target energy level for optimal stacking
+    """
+    if move.energy_cost <= 0:
+        return 0
+    
+    # Calculate how many times the move can be used with 100 energy
+    max_uses = math.floor(100 / move.energy_cost)
+    
+    # Target energy is the maximum energy that allows for optimal stacking
+    target_energy = max_uses * move.energy_cost
+    
+    return target_energy
+```
+
+#### 1P.2: Stacking Viability Check
+```python
+def should_stack_self_debuffing_move(self, poke: Pokemon, opponent: Pokemon, move: Move) -> bool:
+    """
+    Determine if Pokemon should build energy to stack a self-debuffing move.
+    
+    Args:
+        poke: Current Pokemon
+        opponent: Opponent Pokemon  
+        move: The self-debuffing move being considered
+        
+    Returns:
+        True if should build energy for stacking, False otherwise
+    """
+    if not getattr(move, 'self_debuffing', False):
+        return False
+    
+    target_energy = self.calculate_target_energy_for_stacking(move)
+    
+    # Only stack if current energy is below target
+    if poke.energy >= target_energy:
+        return False
+    
+    # Check if move won't KO opponent (no point stacking if it's lethal)
+    move_damage = DamageCalculator.calculate_damage(poke, opponent, move)
+    if opponent.current_hp <= move_damage and opponent.shields == 0:
+        return False
+    
+    # Check if Pokemon can survive while building energy
+    return self.can_survive_energy_building_phase(poke, opponent)
+```
+
+#### 1P.3: Survivability During Energy Building
+```python
+def can_survive_energy_building_phase(self, poke: Pokemon, opponent: Pokemon) -> bool:
+    """
+    Check if Pokemon can survive while building energy for stacking.
+    
+    Considers:
+    - Opponent fast move damage
+    - Timing advantages from cooldown differences
+    """
+    # Basic survivability: can survive at least 2 opponent fast moves
+    if poke.current_hp <= opponent.fast_move.damage * 2:
+        return False
+    
+    # Timing advantage: check if we have cooldown advantage
+    cooldown_advantage = opponent.fast_move.cooldown - poke.fast_move.cooldown
+    
+    # If we have significant timing advantage (500ms+), safer to build energy
+    if cooldown_advantage > 500:
+        return True
+    
+    # Otherwise, use conservative survivability check
+    return poke.current_hp > opponent.fast_move.damage * 3
+```
+
+#### 1P.4: Energy Building Decision Logic
+```python
+def decide_energy_building_for_stacking(self, poke: Pokemon, opponent: Pokemon, move: Move) -> bool:
+    """
+    Make the final decision on whether to build energy for stacking.
+    
+    Returns:
+        True if should build energy (don't use move yet), False if should use move now
+    """
+    if not self.should_stack_self_debuffing_move(poke, opponent, move):
+        return False
+    
+    target_energy = self.calculate_target_energy_for_stacking(move)
+    
+    # Calculate how many fast moves needed to reach target
+    energy_needed = target_energy - poke.energy
+    fast_moves_needed = math.ceil(energy_needed / poke.fast_move.energy_gain)
+    
+    # Estimate turns needed
+    turns_needed = fast_moves_needed * poke.fast_move.turns
+    
+    # Check if opponent can KO us during this time
+    opponent_damage_per_turn = opponent.fast_move.damage / opponent.fast_move.turns
+    total_damage_taken = opponent_damage_per_turn * turns_needed
+    
+    return poke.current_hp > total_damage_taken
+```
+
+### Step 1Q: Shield Baiting Override for Self-Debuffing Moves
+
+#### 1Q.1: Close Energy Cost Comparison
+```python
+def check_close_energy_alternatives(self, poke: Pokemon, debuffing_move: Move) -> Optional[Move]:
+    """
+    Check for alternative moves with similar energy costs to avoid debuffing during baiting.
+    
+    Args:
+        poke: Current Pokemon
+        debuffing_move: The self-debuffing move being considered
+        
+    Returns:
+        Alternative move if found, None otherwise
+    """
+    if not poke.active_charged_moves or len(poke.active_charged_moves) < 2:
+        return None
+    
+    for alt_move in poke.active_charged_moves:
+        if alt_move == debuffing_move:
+            continue
+        
+        # Check if alternative move has similar energy cost (within 10)
+        energy_diff = abs(alt_move.energy_cost - debuffing_move.energy_cost)
+        
+        if (energy_diff <= 10 and 
+            poke.energy >= alt_move.energy_cost and
+            not getattr(alt_move, 'self_debuffing', False)):
+            
+            return alt_move
+    
+    return None
+```
+
+#### 1Q.2: Baiting Override Decision Logic
+```python
+def should_override_debuffing_for_baiting(self, poke: Pokemon, opponent: Pokemon, current_move: Move) -> Tuple[bool, Optional[Move]]:
+    """
+    Determine if a self-debuffing move should be overridden for shield baiting.
+    
+    Args:
+        poke: Current Pokemon
+        opponent: Opponent Pokemon
+        current_move: The currently selected self-debuffing move
+        
+    Returns:
+        Tuple of (should_override: bool, alternative_move: Optional[Move])
+    """
+    # Only apply when baiting shields
+    if not poke.bait_shields or opponent.shields <= 0:
+        return False, None
+    
+    # Only apply to self-debuffing moves
+    if not getattr(current_move, 'self_debuffing', False):
+        return False, None
+    
+    # Check for close energy alternatives
+    alt_move = self.check_close_energy_alternatives(poke, current_move)
+    
+    if alt_move:
+        # Prefer self-buffing moves
+        if getattr(alt_move, 'self_buffing', False):
+            return True, alt_move
+        
+        # Or prefer moves that opponent would shield
+        shield_decision = self.would_shield(poke, opponent, current_move)
+        if shield_decision['value']:
+            return True, alt_move
+    
+    return False, None
+```
+
+#### 1Q.3: Self-Buffing Move Prioritization
+```python
+def prioritize_self_buffing_during_baiting(self, poke: Pokemon, opponent: Pokemon, moves: List[Move]) -> List[Move]:
+    """
+    Reorder moves to prioritize self-buffing moves during shield baiting.
+    
+    Args:
+        poke: Current Pokemon
+        opponent: Opponent Pokemon
+        moves: List of available moves
+        
+    Returns:
+        Reordered list with self-buffing moves prioritized
+    """
+    if not poke.bait_shields or opponent.shields <= 0:
+        return moves
+    
+    def baiting_priority(move):
+        # Highest priority: self-buffing moves
+        if getattr(move, 'self_buffing', False):
+            return (0, move.energy_cost)
+        
+        # Medium priority: non-debuffing moves
+        elif not getattr(move, 'self_debuffing', False):
+            return (1, move.energy_cost)
+        
+        # Lowest priority: self-debuffing moves
+        else:
+            return (2, move.energy_cost)
+    
+    return sorted(moves, key=baiting_priority)
+```
+
+### Step 1R: Aegislash Form Change Logic
+
+#### 1R.1: Form-Specific Energy Management
+```python
+def should_build_energy_for_aegislash(self, poke: Pokemon, opponent: Pokemon, battle) -> bool:
+    """
+    Determine if Aegislash should build energy before changing forms.
+    
+    Aegislash Shield form wants to maximize energy before switching to Blade form
+    to minimize time spent in the vulnerable Blade form.
+    """
+    # Only apply to Aegislash Shield form
+    if not hasattr(poke, 'active_form_id') or poke.active_form_id != "aegislash_shield":
+        return False
+    
+    # Calculate energy threshold (nearly full energy)
+    energy_threshold = 100 - (poke.fast_move.energy_gain / 2)
+    
+    # Build energy if below threshold
+    if poke.energy < energy_threshold:
+        return self.validate_aegislash_energy_building(poke, opponent, battle)
+    
+    return False
+```
+
+#### 1R.2: Battle Mode Consideration
+```python
+def validate_aegislash_energy_building(self, poke: Pokemon, opponent: Pokemon, battle) -> bool:
+    """
+    Validate Aegislash energy building based on battle mode and conditions.
+    
+    Args:
+        poke: Aegislash Pokemon
+        opponent: Opponent Pokemon
+        battle: Battle instance for mode checking
+        
+    Returns:
+        True if should build energy, False if should use charged move
+    """
+    battle_mode = battle.get_mode()
+    
+    # In simulate mode, check if move won't KO opponent
+    if battle_mode == "simulate":
+        if hasattr(poke, 'best_charged_move') and poke.best_charged_move:
+            move_damage = DamageCalculator.calculate_damage(poke, opponent, poke.best_charged_move)
+            if move_damage < opponent.current_hp:
+                return True  # Build energy since move won't KO
+    
+    # In emulate mode, always build energy for optimal play
+    elif battle_mode == "emulate":
+        return True
+    
+    return False
+```
+
+#### 1R.3: Form Change Timing Optimization
+```python
+def optimize_aegislash_form_timing(self, poke: Pokemon, opponent: Pokemon) -> bool:
+    """
+    Optimize timing for Aegislash form changes to minimize vulnerability.
+    
+    Returns:
+        True if should delay form change, False if should proceed
+    """
+    if not hasattr(poke, 'active_form_id') or poke.active_form_id != "aegislash_shield":
+        return False
+    
+    # Don't delay if opponent can KO with charged move
+    for move in opponent.active_charged_moves:
+        if opponent.energy >= move.energy_cost:
+            move_damage = DamageCalculator.calculate_damage(opponent, poke, move)
+            
+            # Account for form change vulnerability
+            blade_form_multiplier = 1.5  # Blade form takes more damage
+            adjusted_damage = move_damage * blade_form_multiplier
+            
+            if adjusted_damage >= poke.current_hp and poke.shields == 0:
+                return False  # Don't delay, opponent can KO in Blade form
+    
+    # Safe to build energy
+    return True
+```
+
+### Integration with Main Decision Logic
+
+#### Integration Point in decide_action Method
+```python
+def decide_action(self, poke: Pokemon, opponent: Pokemon) -> str:
+    """Main decision method with self-debuffing move handling."""
+    
+    # ... existing DP algorithm logic ...
+    
+    # After DP algorithm selects best move, apply self-debuffing logic
+    if hasattr(finalState, 'moves') and finalState.moves:
+        selected_move = finalState.moves[0]
+        
+        # Step 1O: Check if self-debuffing move should be deferred
+        if self.should_defer_self_debuffing_move(poke, opponent, selected_move):
+            self.battle.log_decision(poke, f" is deferring {selected_move.name} until after opponent fires its move")
+            return "fast"  # Use fast move instead
+        
+        # Step 1P: Check if should build energy for stacking
+        if self.decide_energy_building_for_stacking(poke, opponent, selected_move):
+            max_uses = math.floor(100 / selected_move.energy_cost)
+            self.battle.log_decision(poke, f" doesn't use {selected_move.name} because it wants to stack the move {max_uses} times")
+            return "fast"  # Build energy with fast move
+        
+        # Step 1Q: Check for baiting override
+        should_override, alt_move = self.should_override_debuffing_for_baiting(poke, opponent, selected_move)
+        if should_override and alt_move:
+            selected_move = alt_move
+            self.battle.log_decision(poke, f" uses {alt_move.name} instead to avoid self-debuffing while baiting")
+    
+    # Step 1R: Aegislash form change logic
+    if self.should_build_energy_for_aegislash(poke, opponent, self.battle):
+        self.battle.log_decision(poke, " wants to gain as much energy as possible before changing form")
+        return "fast"
+    
+    # ... continue with move execution logic ...
+```
+
+### Required Extensions
+
+#### Pokemon Class Extensions
+```python
+class Pokemon:
+    def __init__(self):
+        # ... existing initialization
+        self.active_form_id = None  # For form-specific logic (Aegislash)
+        self.best_charged_move = None  # Cached best move reference
+```
+
+#### Move Class Extensions
+```python
+class Move:
+    def __init__(self):
+        # ... existing initialization
+        self.self_debuffing = False  # Move debuffs user's stats
+        self.self_attack_debuffing = False  # Move debuffs user's attack
+        self.self_defense_debuffing = False  # Move debuffs user's defense
+        self.self_buffing = False  # Move buffs user's stats
+```
+
+### Testing Strategy
+
+#### Unit Tests
+1. **Deferral Logic**: Test deferral when opponent has lethal moves
+2. **Energy Stacking**: Test target energy calculation and stacking decisions
+3. **Baiting Override**: Test preference for non-debuffing moves during baiting
+4. **Aegislash Logic**: Test form-specific energy building
+5. **Survivability Checks**: Test various survivability scenarios
+
+#### Integration Tests
+1. **DP Algorithm Integration**: Test self-debuffing logic within DP states
+2. **Real Battle Scenarios**: Test with actual self-debuffing moves (Superpower, Close Combat)
+3. **JavaScript Parity**: Compare decisions with JavaScript implementation
+4. **Performance Impact**: Ensure logic doesn't slow down battles
+
+#### Test Cases
+```python
+def test_superpower_deferral():
+    """Test deferring Superpower when opponent has lethal Hydro Cannon ready."""
+    # Setup: Opponent has Hydro Cannon ready, Pokemon has Superpower
+    # Expected: Should defer Superpower and use fast move
+    
+def test_energy_stacking_calculation():
+    """Test energy stacking for 50-energy move (should target 100 energy)."""
+    # Setup: Pokemon with 50-energy self-debuffing move, current energy 60
+    # Expected: Should build to 100 energy for 2-move stack
+    
+def test_aegislash_energy_building():
+    """Test Aegislash Shield form energy building."""
+    # Setup: Aegislash Shield with 80 energy, fast move gains 3 energy
+    # Expected: Should build to ~98 energy before using charged move
+```
+
+### Performance Considerations
+- Cache form change calculations for Aegislash
+- Limit energy stacking analysis to prevent infinite loops
+- Use early returns when conditions aren't met
+- Consider disabling complex logic in fast simulation modes
+
 ## Implementation Priority
 
 ### Phase 1: Core Decision Logic (High Priority)
@@ -1378,7 +1883,7 @@ def test_self_debuffing_avoidance():
 
 ## Current Status
 
-✅ **Completed (~65%)**:
+✅ **Completed (~70%)**:
 - Basic ActionLogic class structure
 - Complete DP queue algorithm implementation (Steps 1A-1C)
 - Complete Move Timing Optimization system (Steps 1D-1F)
@@ -1387,17 +1892,20 @@ def test_self_debuffing_avoidance():
 - Complete Lethal Detection DP Integration system (Step 1I)
 - Complete Shield Baiting Logic with DPE Ratio Analysis (Steps 1J-1K)
 - Complete Move Reordering Logic system (Step 1L)
-- Full `decide_action` implementation with DP algorithm, timing optimization, lethal detection, and move reordering
+- Complete Advanced Baiting Conditions (Step 1M)
+- Complete Shield Baiting DP Integration (Step 1N)
+- Complete Self-Debuffing Move Deferral Logic (Step 1O)
+- Full `decide_action` implementation with DP algorithm, timing optimization, lethal detection, shield baiting, and self-debuffing deferral
 - `decide_random_action` method (complete with lethal weight boosting)
 - `would_shield` method (basic implementation)
 - `choose_option` method (complete)
 - Battle context methods (`get_queued_actions`, `log_decision`, `get_mode`)
 - Comprehensive test coverage for all implemented components
 
-❌ **Missing (~35%)**:
-- Advanced baiting conditions (Step 1M)
-- Self-debuffing move handling
-- Energy stacking logic
+❌ **Missing (~30%)**:
+- Energy stacking logic for self-debuffing moves (Step 1P)
+- Shield baiting override for self-debuffing moves (Step 1Q)
+- Aegislash form change logic (Step 1R)
 - Pokemon/Move property extensions
 - Timeline system
 - TrainingAI integration

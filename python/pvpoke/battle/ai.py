@@ -589,6 +589,12 @@ class ActionLogic:
                 ActionLogic._log_decision(battle, poke, " baiting logic returned None, using fast move")
                 return None
             
+            # STEP 1O: SELF-DEBUFFING MOVE DEFERRAL LOGIC
+            # Check if self-debuffing move should be deferred
+            if ActionLogic.should_defer_self_debuffing_move(battle, poke, opponent, selected_move):
+                ActionLogic._log_decision(battle, poke, f" is deferring {selected_move.move_id} until after opponent fires its move")
+                return None  # Use fast move instead
+            
             # Find the index of the selected move in active charged moves
             move_index = 0
             for i, move in enumerate(active_charged_moves):
@@ -615,6 +621,12 @@ class ActionLogic:
                 selected_move = ActionLogic._apply_shield_baiting_logic(
                     poke, opponent, best_state.moves, active_charged_moves, battle
                 )
+                
+                # STEP 1O: SELF-DEBUFFING MOVE DEFERRAL LOGIC
+                # Check if self-debuffing move should be deferred
+                if ActionLogic.should_defer_self_debuffing_move(battle, poke, opponent, selected_move):
+                    ActionLogic._log_decision(battle, poke, f" is deferring {selected_move.move_id} until after opponent fires its move")
+                    return None  # Use fast move instead
                 
                 # Find the index of the selected move in active charged moves
                 move_index = 0
@@ -2404,6 +2416,89 @@ class ActionLogic:
         if hasattr(battle, 'log_decision'):
             battle.log_decision(poke, message)
         # Could also print or log to a file for debugging
+
+    # ========== SELF-DEBUFFING MOVE DEFERRAL LOGIC (Step 1O) ==========
+    
+    @staticmethod
+    def should_defer_self_debuffing_move(battle, poke: Pokemon, opponent: Pokemon, move: ChargedMove) -> bool:
+        """
+        Determine if a self-debuffing move should be deferred due to opponent threats.
+        
+        Args:
+            battle: Battle instance
+            poke: Current Pokemon with the debuffing move
+            opponent: Opponent Pokemon
+            move: The self-debuffing move being considered
+            
+        Returns:
+            True if move should be deferred, False otherwise
+        """
+        # Only apply to self-debuffing moves
+        if not getattr(move, 'self_debuffing', False):
+            return False
+        
+        # Don't defer if Pokemon has no shields and low energy
+        if poke.shields == 0 and poke.energy < 100:
+            # Check if opponent has a lethal charged move ready
+            if hasattr(opponent, 'best_charged_move') and opponent.best_charged_move:
+                if opponent.energy >= opponent.best_charged_move.energy_cost:
+                    # Check if opponent would use the move (not shield it)
+                    shield_decision = ActionLogic.would_shield(battle, opponent, poke, opponent.best_charged_move)
+                    if not shield_decision.value:
+                        # Exception: Don't defer if our move is self-buffing
+                        active_moves = ActionLogic.get_active_charged_moves(poke)
+                        if active_moves and not getattr(active_moves[0], 'self_buffing', False):
+                            return True
+        
+        return False
+    
+    @staticmethod
+    def assess_survivability_against_opponent_move(poke: Pokemon, opponent: Pokemon) -> bool:
+        """
+        Assess if Pokemon can survive opponent's best charged move.
+        
+        Args:
+            poke: Current Pokemon
+            opponent: Opponent Pokemon
+            
+        Returns:
+            True if Pokemon can survive, False if move would be lethal
+        """
+        if not hasattr(opponent, 'best_charged_move') or not opponent.best_charged_move:
+            return True
+        
+        # Calculate damage from opponent's best move
+        move_damage = DamageCalculator.calculate_damage(opponent, poke, opponent.best_charged_move)
+        
+        # Account for shields
+        if poke.shields > 0:
+            move_damage = 1  # Shields reduce charged move damage to 1
+        
+        # Check if Pokemon survives
+        return poke.current_hp > move_damage
+    
+    @staticmethod
+    def has_self_buffing_exception(poke: Pokemon) -> bool:
+        """
+        Check if Pokemon has a self-buffing move that overrides deferral logic.
+        
+        Self-buffing moves are valuable enough to use even when opponent has threats.
+        
+        Args:
+            poke: Current Pokemon
+            
+        Returns:
+            True if has self-buffing exception, False otherwise
+        """
+        active_moves = ActionLogic.get_active_charged_moves(poke)
+        if not active_moves:
+            return False
+        
+        # Check if the lowest energy move is self-buffing
+        lowest_energy_move = min(active_moves, key=lambda m: m.energy_cost)
+        
+        return (poke.energy >= lowest_energy_move.energy_cost and 
+                getattr(lowest_energy_move, 'self_buffing', False))
 
 
 # Legacy compatibility methods
