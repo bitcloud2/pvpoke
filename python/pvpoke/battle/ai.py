@@ -2715,6 +2715,8 @@ class ActionLogic:
         - Only when opponent has shields and baiting is enabled
         - Prefers non-debuffing moves that are close in energy cost (within 10)
         
+        This is the main integration point for Step 1T.
+        
         Args:
             battle: Battle instance
             poke: Current Pokemon
@@ -2725,49 +2727,175 @@ class ActionLogic:
         Returns:
             Alternative move to use, or None if no override needed
         """
-        # Only apply to self-debuffing moves
-        if not getattr(current_move, 'self_debuffing', False):
-            return None
+        # Use the integrated baiting override logic (Step 1T)
+        return ActionLogic.apply_baiting_override_for_stacking(
+            battle, poke, opponent, current_move, active_charged_moves
+        )
+    
+    # ========== ENERGY STACKING WITH SHIELD BAITING OVERRIDE (Step 1T) ==========
+    
+    @staticmethod
+    def check_baiting_override_for_stacking(poke: Pokemon, opponent: Pokemon, 
+                                           debuffing_move: ChargedMove,
+                                           active_charged_moves: List[ChargedMove]) -> Optional[ChargedMove]:
+        """
+        Check if should override self-debuffing move with alternative when baiting shields.
         
-        # Only when baiting shields and opponent has shields
-        if not getattr(poke, 'bait_shields', False) or opponent.shields == 0:
-            return None
+        This applies when:
+        1. Pokemon is at or above target stacking energy
+        2. Baiting shields is enabled
+        3. Opponent has shields
+        4. Alternative move has similar energy cost (within 10)
+        5. Alternative move is non-debuffing
         
-        # Calculate target energy
-        target_energy = math.floor(100 / current_move.energy_cost) * current_move.energy_cost
-        
-        # Only override if at or above target energy
-        if poke.energy < target_energy:
-            return None
-        
-        # Check if we have a suitable bait move
-        if not active_charged_moves:
-            return None
-        
-        # Get the lowest energy move (first in active charged moves)
-        lowest_energy_move = active_charged_moves[0]
-        
-        # Check if energy costs are close (within 10)
-        # JavaScript: poke.activeChargedMoves[0].energy - finalState.moves[0].energy <= 10
-        energy_difference = lowest_energy_move.energy_cost - current_move.energy_cost
-        
-        if energy_difference <= 10 and not getattr(lowest_energy_move, 'self_debuffing', False):
-            # Use the lower energy move if it's self-buffing or opponent would shield the bigger move
-            if getattr(lowest_energy_move, 'self_buffing', False):
-                ActionLogic._log_decision(
-                    battle, poke,
-                    f" using self-buffing bait move {lowest_energy_move.move_id} instead of {current_move.move_id}"
-                )
-                return lowest_energy_move
+        Args:
+            poke: Current Pokemon
+            opponent: Opponent Pokemon
+            debuffing_move: The self-debuffing move being considered
+            active_charged_moves: List of all active charged moves
             
-            # Check if opponent would shield the current (bigger) move
-            shield_decision = ActionLogic.would_shield(battle, poke, opponent, current_move)
-            if shield_decision.value:
-                ActionLogic._log_decision(
-                    battle, poke,
-                    f" using bait move {lowest_energy_move.move_id} because opponent would shield {current_move.move_id}"
+        Returns:
+            Alternative move if override is appropriate, None otherwise
+        """
+        # Only apply when baiting shields
+        if not getattr(poke, 'bait_shields', False) or opponent.shields <= 0:
+            return None
+        
+        # Only apply to self-debuffing moves
+        if not getattr(debuffing_move, 'self_debuffing', False):
+            return None
+        
+        # Check if we have energy for alternative moves
+        if not active_charged_moves or len(active_charged_moves) < 2:
+            return None
+        
+        # Find the lowest energy move (typically first in sorted list)
+        alternative_move = active_charged_moves[0]
+        
+        # Check if alternative is within 10 energy of debuffing move
+        energy_diff = alternative_move.energy_cost - debuffing_move.energy_cost
+        
+        if energy_diff <= 10 and not getattr(alternative_move, 'self_debuffing', False):
+            # Check if Pokemon has enough energy for alternative
+            if poke.energy >= alternative_move.energy_cost:
+                return alternative_move
+        
+        return None
+    
+    @staticmethod
+    def should_use_buffing_move_instead(poke: Pokemon, opponent: Pokemon, 
+                                        debuffing_move: ChargedMove, 
+                                        alternative_move: ChargedMove) -> bool:
+        """
+        Determine if self-buffing alternative should be used instead of debuffing move.
+        
+        Prefer self-buffing moves when:
+        1. Alternative is self-buffing
+        2. Energy costs are similar (within 10)
+        3. Opponent has shields (baiting scenario)
+        
+        Args:
+            poke: Current Pokemon
+            opponent: Opponent Pokemon
+            debuffing_move: The self-debuffing move
+            alternative_move: The potential alternative move
+            
+        Returns:
+            True if should use alternative, False otherwise
+        """
+        # Check if alternative is self-buffing
+        if not getattr(alternative_move, 'self_buffing', False):
+            return False
+        
+        # Check if Pokemon has enough energy for alternative
+        if poke.energy < alternative_move.energy_cost:
+            return False
+        
+        # Prefer self-buffing move when baiting shields
+        if getattr(poke, 'bait_shields', False) and opponent.shields > 0:
+            return True
+        
+        return False
+    
+    @staticmethod
+    def should_swap_based_on_shield_prediction(battle, poke: Pokemon, opponent: Pokemon, 
+                                               debuffing_move: ChargedMove, 
+                                               alternative_move: ChargedMove) -> bool:
+        """
+        Determine if should swap to alternative based on opponent shield prediction.
+        
+        Swap if:
+        1. Opponent would shield the debuffing move
+        2. Alternative move is available and non-debuffing
+        3. Energy costs are similar
+        
+        Args:
+            battle: Battle instance
+            poke: Current Pokemon
+            opponent: Opponent Pokemon
+            debuffing_move: The self-debuffing move
+            alternative_move: The potential alternative move
+            
+        Returns:
+            True if should swap to alternative, False otherwise
+        """
+        # Check if opponent would shield the debuffing move
+        shield_decision = ActionLogic.would_shield(battle, poke, opponent, debuffing_move)
+        
+        if shield_decision.value:
+            # Opponent would shield - prefer non-debuffing alternative
+            if not getattr(alternative_move, 'self_debuffing', False):
+                return True
+        
+        return False
+    
+    @staticmethod
+    def apply_baiting_override_for_stacking(battle, poke: Pokemon, opponent: Pokemon, 
+                                           current_move: ChargedMove,
+                                           active_charged_moves: List[ChargedMove]) -> Optional[ChargedMove]:
+        """
+        Apply shield baiting override logic for energy stacking scenarios.
+        
+        This is the main integration point that combines all baiting override checks.
+        Implements JavaScript lines 929-934 from ActionLogic.js.
+        
+        Args:
+            battle: Battle instance
+            poke: Current Pokemon
+            opponent: Opponent Pokemon
+            current_move: The currently selected move (potentially self-debuffing)
+            active_charged_moves: List of all active charged moves
+            
+        Returns:
+            The move to use (either current_move or an alternative)
+        """
+        # Only apply when at or above target stacking energy
+        if getattr(current_move, 'self_debuffing', False):
+            target_energy = ActionLogic.calculate_stacking_target_energy(current_move)
+            
+            # Only override if at or above target energy
+            if poke.energy >= target_energy:
+                # Check for baiting override
+                alternative = ActionLogic.check_baiting_override_for_stacking(
+                    poke, opponent, current_move, active_charged_moves
                 )
-                return lowest_energy_move
+                
+                if alternative:
+                    # Check if should use buffing move instead
+                    if ActionLogic.should_use_buffing_move_instead(poke, opponent, current_move, alternative):
+                        ActionLogic._log_decision(
+                            battle, poke,
+                            f" using self-buffing bait move {alternative.move_id} instead of {current_move.move_id}"
+                        )
+                        return alternative
+                    
+                    # Check if should swap based on shield prediction
+                    if ActionLogic.should_swap_based_on_shield_prediction(battle, poke, opponent, current_move, alternative):
+                        ActionLogic._log_decision(
+                            battle, poke,
+                            f" using bait move {alternative.move_id} because opponent would shield {current_move.move_id}"
+                        )
+                        return alternative
         
         return None
     

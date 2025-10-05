@@ -778,5 +778,419 @@ class TestIntegratedEnergyStacking:
             assert should_stack == expected, f"Failed at energy={energy}, expected={expected}"
 
 
+class TestStep1T1CloseEnergyCostComparison:
+    """Test Step 1T.1: Close Energy Cost Comparison."""
+    
+    def test_check_baiting_override_finds_alternative(self):
+        """Test finding alternative move with close energy cost."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 1
+        poke.bait_shields = True
+        
+        # Add alternative move with energy cost within 10
+        bait_move = Mock(spec=ChargedMove)
+        bait_move.move_id = "cross_chop"
+        bait_move.energy_cost = 35  # 35 - 40 = -5, within 10
+        bait_move.self_debuffing = False
+        bait_move.self_buffing = False
+        
+        active_moves = [bait_move, poke.charged_move_1]
+        
+        alternative = ActionLogic.check_baiting_override_for_stacking(
+            poke, opponent, poke.charged_move_1, active_moves
+        )
+        assert alternative == bait_move
+    
+    def test_check_baiting_override_energy_diff_too_large(self):
+        """Test no override when energy difference > 10."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 1
+        poke.bait_shields = True
+        
+        # Add alternative move with energy cost difference > 10
+        bait_move = Mock(spec=ChargedMove)
+        bait_move.move_id = "dynamic_punch"
+        bait_move.energy_cost = 55  # 55 - 40 = 15 > 10
+        bait_move.self_debuffing = False
+        
+        active_moves = [poke.charged_move_1, bait_move]
+        
+        alternative = ActionLogic.check_baiting_override_for_stacking(
+            poke, opponent, poke.charged_move_1, active_moves
+        )
+        assert alternative is None
+    
+    def test_check_baiting_override_no_shields(self):
+        """Test no override when opponent has no shields."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 0  # No shields
+        poke.bait_shields = True
+        
+        bait_move = Mock(spec=ChargedMove)
+        bait_move.move_id = "cross_chop"
+        bait_move.energy_cost = 35
+        bait_move.self_debuffing = False
+        
+        active_moves = [bait_move, poke.charged_move_1]
+        
+        alternative = ActionLogic.check_baiting_override_for_stacking(
+            poke, opponent, poke.charged_move_1, active_moves
+        )
+        assert alternative is None
+    
+    def test_check_baiting_override_baiting_disabled(self):
+        """Test no override when bait_shields is disabled."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 1
+        poke.bait_shields = False  # Baiting disabled
+        
+        bait_move = Mock(spec=ChargedMove)
+        bait_move.move_id = "cross_chop"
+        bait_move.energy_cost = 35
+        bait_move.self_debuffing = False
+        
+        active_moves = [bait_move, poke.charged_move_1]
+        
+        alternative = ActionLogic.check_baiting_override_for_stacking(
+            poke, opponent, poke.charged_move_1, active_moves
+        )
+        assert alternative is None
+    
+    def test_check_baiting_override_insufficient_energy(self):
+        """Test no override when Pokemon lacks energy for alternative."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=40, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 1
+        poke.bait_shields = True
+        
+        # Alternative requires 45 energy but Pokemon only has 40
+        bait_move = Mock(spec=ChargedMove)
+        bait_move.move_id = "rock_slide"
+        bait_move.energy_cost = 45
+        bait_move.self_debuffing = False
+        
+        active_moves = [poke.charged_move_1, bait_move]
+        
+        alternative = ActionLogic.check_baiting_override_for_stacking(
+            poke, opponent, poke.charged_move_1, active_moves
+        )
+        assert alternative is None
+
+
+class TestStep1T2SelfBuffingMovePriority:
+    """Test Step 1T.2: Self-Buffing Move Priority."""
+    
+    def test_should_use_buffing_move_instead(self):
+        """Test preference for self-buffing alternative."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 1
+        poke.bait_shields = True
+        
+        # Self-buffing alternative
+        buffing_move = Mock(spec=ChargedMove)
+        buffing_move.move_id = "power_up_punch"
+        buffing_move.energy_cost = 35
+        buffing_move.self_buffing = True
+        buffing_move.self_debuffing = False
+        
+        should_use = ActionLogic.should_use_buffing_move_instead(
+            poke, opponent, poke.charged_move_1, buffing_move
+        )
+        assert should_use is True
+    
+    def test_no_buffing_move_preference_without_shields(self):
+        """Test no buffing preference when opponent has no shields."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 0  # No shields
+        poke.bait_shields = True
+        
+        buffing_move = Mock(spec=ChargedMove)
+        buffing_move.move_id = "power_up_punch"
+        buffing_move.energy_cost = 35
+        buffing_move.self_buffing = True
+        buffing_move.self_debuffing = False
+        
+        should_use = ActionLogic.should_use_buffing_move_instead(
+            poke, opponent, poke.charged_move_1, buffing_move
+        )
+        assert should_use is False
+    
+    def test_no_buffing_move_preference_for_non_buffing(self):
+        """Test no preference for non-buffing alternative."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 1
+        poke.bait_shields = True
+        
+        # Non-buffing alternative
+        normal_move = Mock(spec=ChargedMove)
+        normal_move.move_id = "cross_chop"
+        normal_move.energy_cost = 35
+        normal_move.self_buffing = False
+        normal_move.self_debuffing = False
+        
+        should_use = ActionLogic.should_use_buffing_move_instead(
+            poke, opponent, poke.charged_move_1, normal_move
+        )
+        assert should_use is False
+    
+    def test_no_buffing_move_preference_insufficient_energy(self):
+        """Test no preference when insufficient energy for buffing move."""
+        poke = create_test_pokemon("Machamp", hp=150, energy=30, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 1
+        poke.bait_shields = True
+        
+        # Buffing move requires 35 energy but Pokemon only has 30
+        buffing_move = Mock(spec=ChargedMove)
+        buffing_move.move_id = "power_up_punch"
+        buffing_move.energy_cost = 35
+        buffing_move.self_buffing = True
+        
+        should_use = ActionLogic.should_use_buffing_move_instead(
+            poke, opponent, poke.charged_move_1, buffing_move
+        )
+        assert should_use is False
+
+
+class TestStep1T3OpponentShieldPrediction:
+    """Test Step 1T.3: Opponent Shield Prediction."""
+    
+    def test_should_swap_based_on_shield_prediction_true(self):
+        """Test swapping when opponent would shield debuffing move."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=50, energy=50)  # Low HP to trigger shield
+        opponent.shields = 1
+        
+        # Mock would_shield to return True
+        original_would_shield = ActionLogic.would_shield
+        
+        def mock_would_shield(battle, attacker, defender, move):
+            from pvpoke.battle.ai import ShieldDecision
+            return ShieldDecision(value=True, shield_weight=4, no_shield_weight=1)
+        
+        ActionLogic.would_shield = staticmethod(mock_would_shield)
+        
+        try:
+            alternative = Mock(spec=ChargedMove)
+            alternative.move_id = "cross_chop"
+            alternative.energy_cost = 35
+            alternative.self_debuffing = False
+            
+            should_swap = ActionLogic.should_swap_based_on_shield_prediction(
+                battle, poke, opponent, poke.charged_move_1, alternative
+            )
+            assert should_swap is True
+        finally:
+            ActionLogic.would_shield = original_would_shield
+    
+    def test_should_swap_based_on_shield_prediction_false(self):
+        """Test no swap when opponent wouldn't shield."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 1
+        
+        # Mock would_shield to return False
+        original_would_shield = ActionLogic.would_shield
+        
+        def mock_would_shield(battle, attacker, defender, move):
+            from pvpoke.battle.ai import ShieldDecision
+            return ShieldDecision(value=False, shield_weight=1, no_shield_weight=4)
+        
+        ActionLogic.would_shield = staticmethod(mock_would_shield)
+        
+        try:
+            alternative = Mock(spec=ChargedMove)
+            alternative.move_id = "cross_chop"
+            alternative.energy_cost = 35
+            alternative.self_debuffing = False
+            
+            should_swap = ActionLogic.should_swap_based_on_shield_prediction(
+                battle, poke, opponent, poke.charged_move_1, alternative
+            )
+            assert should_swap is False
+        finally:
+            ActionLogic.would_shield = original_would_shield
+    
+    def test_no_swap_for_debuffing_alternative(self):
+        """Test no swap when alternative is also debuffing."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=50, energy=50)
+        opponent.shields = 1
+        
+        # Mock would_shield to return True
+        original_would_shield = ActionLogic.would_shield
+        
+        def mock_would_shield(battle, attacker, defender, move):
+            from pvpoke.battle.ai import ShieldDecision
+            return ShieldDecision(value=True, shield_weight=4, no_shield_weight=1)
+        
+        ActionLogic.would_shield = staticmethod(mock_would_shield)
+        
+        try:
+            alternative = Mock(spec=ChargedMove)
+            alternative.move_id = "close_combat"
+            alternative.energy_cost = 45
+            alternative.self_debuffing = True  # Also debuffing
+            
+            should_swap = ActionLogic.should_swap_based_on_shield_prediction(
+                battle, poke, opponent, poke.charged_move_1, alternative
+            )
+            assert should_swap is False
+        finally:
+            ActionLogic.would_shield = original_would_shield
+
+
+class TestStep1T4IntegratedBaitingOverride:
+    """Test Step 1T.4: Integrated Baiting Override Logic."""
+    
+    def test_apply_baiting_override_with_buffing_move(self):
+        """Test integrated override with self-buffing move."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 1
+        poke.bait_shields = True
+        
+        # Self-buffing alternative
+        buffing_move = Mock(spec=ChargedMove)
+        buffing_move.move_id = "power_up_punch"
+        buffing_move.energy_cost = 35
+        buffing_move.self_buffing = True
+        buffing_move.self_debuffing = False
+        
+        active_moves = [buffing_move, poke.charged_move_1]
+        
+        override = ActionLogic.apply_baiting_override_for_stacking(
+            battle, poke, opponent, poke.charged_move_1, active_moves
+        )
+        assert override == buffing_move
+        assert len(battle.decisions) > 0
+        assert "self-buffing bait move" in battle.decisions[0]
+    
+    def test_apply_baiting_override_with_shield_prediction(self):
+        """Test integrated override based on shield prediction."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=50, energy=50)  # Low HP to trigger shield
+        opponent.shields = 1
+        poke.bait_shields = True
+        
+        # Mock would_shield to return True
+        original_would_shield = ActionLogic.would_shield
+        
+        def mock_would_shield(battle, attacker, defender, move):
+            from pvpoke.battle.ai import ShieldDecision
+            return ShieldDecision(value=True, shield_weight=4, no_shield_weight=1)
+        
+        ActionLogic.would_shield = staticmethod(mock_would_shield)
+        
+        try:
+            # Non-buffing alternative
+            bait_move = Mock(spec=ChargedMove)
+            bait_move.move_id = "cross_chop"
+            bait_move.energy_cost = 35
+            bait_move.self_buffing = False
+            bait_move.self_debuffing = False
+            
+            active_moves = [bait_move, poke.charged_move_1]
+            
+            override = ActionLogic.apply_baiting_override_for_stacking(
+                battle, poke, opponent, poke.charged_move_1, active_moves
+            )
+            assert override == bait_move
+            assert len(battle.decisions) > 0
+            assert "opponent would shield" in battle.decisions[0]
+        finally:
+            ActionLogic.would_shield = original_would_shield
+    
+    def test_apply_baiting_override_below_target_energy(self):
+        """Test no override when below target energy."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=50, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 1
+        poke.bait_shields = True
+        
+        buffing_move = Mock(spec=ChargedMove)
+        buffing_move.move_id = "power_up_punch"
+        buffing_move.energy_cost = 35
+        buffing_move.self_buffing = True
+        buffing_move.self_debuffing = False
+        
+        active_moves = [buffing_move, poke.charged_move_1]
+        
+        # Below target energy (80), so no override
+        override = ActionLogic.apply_baiting_override_for_stacking(
+            battle, poke, opponent, poke.charged_move_1, active_moves
+        )
+        assert override is None
+    
+    def test_apply_baiting_override_non_debuffing_move(self):
+        """Test no override for non-debuffing moves."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=False)
+        opponent = create_test_pokemon("Azumarill", hp=150, energy=50)
+        opponent.shields = 1
+        poke.bait_shields = True
+        
+        buffing_move = Mock(spec=ChargedMove)
+        buffing_move.move_id = "power_up_punch"
+        buffing_move.energy_cost = 35
+        buffing_move.self_buffing = True
+        
+        active_moves = [buffing_move, poke.charged_move_1]
+        
+        # Non-debuffing move, so no override
+        override = ActionLogic.apply_baiting_override_for_stacking(
+            battle, poke, opponent, poke.charged_move_1, active_moves
+        )
+        assert override is None
+    
+    def test_apply_baiting_override_priority_buffing_over_prediction(self):
+        """Test that buffing move takes priority over shield prediction."""
+        battle = MockBattle()
+        poke = create_test_pokemon("Machamp", hp=150, energy=80, charged_move_energy=40, self_debuffing=True)
+        opponent = create_test_pokemon("Azumarill", hp=50, energy=50)
+        opponent.shields = 1
+        poke.bait_shields = True
+        
+        # Mock would_shield to return True
+        original_would_shield = ActionLogic.would_shield
+        
+        def mock_would_shield(battle, attacker, defender, move):
+            from pvpoke.battle.ai import ShieldDecision
+            return ShieldDecision(value=True, shield_weight=4, no_shield_weight=1)
+        
+        ActionLogic.would_shield = staticmethod(mock_would_shield)
+        
+        try:
+            # Self-buffing alternative (should be chosen over shield prediction)
+            buffing_move = Mock(spec=ChargedMove)
+            buffing_move.move_id = "power_up_punch"
+            buffing_move.energy_cost = 35
+            buffing_move.self_buffing = True
+            buffing_move.self_debuffing = False
+            
+            active_moves = [buffing_move, poke.charged_move_1]
+            
+            override = ActionLogic.apply_baiting_override_for_stacking(
+                battle, poke, opponent, poke.charged_move_1, active_moves
+            )
+            assert override == buffing_move
+            assert "self-buffing bait move" in battle.decisions[0]
+        finally:
+            ActionLogic.would_shield = original_would_shield
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
