@@ -212,11 +212,11 @@ The Python `decide_action` method now has **comprehensive implementation** of th
         - ✅ Port Shield form shield usage logic (Battle.js lines 1120-1122)
         - ✅ Implement "don't shield if damage * 2 < HP" rule in would_shield method
         - ✅ Add shield decision override tests (test_aegislash_shield_decision.py - 11 tests, all passing)
-    - Step 1Y: Port Aegislash Move Initialization Logic
-        - Port Shield form charged move self-debuffing flag (Pokemon.js lines 745-751)
-        - Mark all charged moves as self-debuffing with [0,0] buffs
-        - Set buffTarget to self for all charged moves
-        - Add move initialization tests
+    - ✅ Step 1Y: Port Aegislash Move Initialization Logic (COMPLETED)
+        - ✅ Port Shield form charged move self-debuffing flag (Pokemon.js lines 745-751)
+        - ✅ Mark all charged moves as self-debuffing with [0,0] buffs
+        - ✅ Set buffTarget to self for all charged moves
+        - ✅ Add move initialization tests (test_aegislash_move_initialization.py - 11 tests, all passing)
     - Step 1Z: Port Aegislash Form Change Move Replacement
         - Port fast move replacement on form change (Pokemon.js lines 2375-2383)
         - Shield→Blade: Replace AEGISLASH_CHARGE_* with normal moves

@@ -219,6 +219,34 @@ class Pokemon:
                 self.charged_move_2.buff_apply_meter = 0.0
             else:
                 self.charged_move_2.buff_apply_meter = self.charged_move_2.buff_chance
+    
+    def initialize_aegislash_moves(self):
+        """
+        Initialize Aegislash Shield form charged moves with self-debuffing properties.
+        
+        For Aegislash Shield form, all charged moves are marked as self-debuffing with
+        [0,0] buffs. This ensures the AI treats them appropriately when making decisions
+        about move timing and baiting.
+        
+        JavaScript Reference (Pokemon.js lines 745-751):
+        if(self.activeFormId == "aegislash_shield"){
+            self.activeChargedMoves.forEach(move => {
+                move.buffs = [0,0];
+                move.buffTarget = self;
+                move.selfDebuffing = true;
+            });
+        }
+        """
+        if self.active_form_id == "aegislash_shield":
+            # Mark all charged moves as self-debuffing with [0,0] buffs
+            if self.charged_move_1:
+                self.charged_move_1.buffs = [0.0, 0.0]
+                self.charged_move_1.buff_target = "self"
+                # Note: self_debuffing is a property that checks buffs, so no need to set it
+            
+            if self.charged_move_2:
+                self.charged_move_2.buffs = [0.0, 0.0]
+                self.charged_move_2.buff_target = "self"
         
     def get_effective_stat(self, stat_index: int) -> float:
         """Get effective stat with buffs applied. 0=atk, 1=def."""
