@@ -80,6 +80,10 @@ class Pokemon:
     cooldown: int = 0  # Cooldown in milliseconds
     turns_to_ko: int = -1  # Turns needed to KO opponent
     
+    # Form-specific properties (for Pokemon like Aegislash)
+    active_form_id: Optional[str] = None  # Current form ID (e.g., "aegislash_shield", "aegislash_blade")
+    best_charged_move: Optional[object] = None  # Cached reference to best charged move
+    
     # CP multipliers for each level (1-50)
     CPM_VALUES = [
         0.0939999967813491, 0.135137430784308, 0.166397869586944, 0.192650914456886,

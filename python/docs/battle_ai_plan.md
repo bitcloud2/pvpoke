@@ -109,16 +109,20 @@ The Python `decide_action` method is only **partially implemented** (lines 270-2
         - ✅ Add timing advantage calculation (cooldown differences)
         - ✅ Add shield baiting override for self-debuffing moves
         - ✅ Add comprehensive test coverage (27 tests, all passing)
-    - ⏳ Step 1Q: Implement Shield Baiting Override for Self-Debuffing Moves
-        - ⏳ Add close energy cost comparison logic (within 10 energy)
-        - ⏳ Implement preference for non-debuffing moves when baiting
-        - ⏳ Add self-buffing move prioritization during baiting
-        - ⏳ Add opponent shield prediction for move swapping
-    - ⏳ Step 1R: Add Aegislash Form Change Logic
-        - ⏳ Implement energy building logic for Aegislash Shield form
-        - ⏳ Add form-specific energy thresholds
-        - ⏳ Add battle mode consideration (simulate vs emulate)
-        - ⏳ Add damage threshold checks for form optimization
+    - ✅ Step 1Q: Implement Shield Baiting Override for Self-Debuffing Moves (COMPLETED)
+        - ✅ Add close energy cost comparison logic (within 10 energy)
+        - ✅ Implement preference for non-debuffing moves when baiting
+        - ✅ Add self-buffing move prioritization during baiting
+        - ✅ Add opponent shield prediction for move swapping
+        - ✅ Add comprehensive test coverage (integrated with Step 1P tests)
+    - ✅ Step 1R: Add Aegislash Form Change Logic (COMPLETED)
+        - ✅ Implement energy building logic for Aegislash Shield form
+        - ✅ Add form-specific energy thresholds (100 - fastMove.energyGain / 2)
+        - ✅ Add battle mode consideration (simulate vs emulate)
+        - ✅ Add damage threshold checks for form optimization
+        - ✅ Add Pokemon class properties (active_form_id, best_charged_move)
+        - ✅ Integrate with decide_action method (both final_state and state_list paths)
+        - ✅ Add comprehensive test coverage (19 tests, all passing)
 - **Energy Stacking**: Logic to stack multiple uses of debuffing moves (lines 919-935 in JS)
 - **Aegislash Form Logic**: Special handling for form changes (lines 957-966 in JS)
 
@@ -1885,7 +1889,7 @@ def test_aegislash_energy_building():
 
 ## Current Status
 
-✅ **Completed (~70%)**:
+✅ **Completed (~80%)**:
 - Basic ActionLogic class structure
 - Complete DP queue algorithm implementation (Steps 1A-1C)
 - Complete Move Timing Optimization system (Steps 1D-1F)
@@ -1897,20 +1901,20 @@ def test_aegislash_energy_building():
 - Complete Advanced Baiting Conditions (Step 1M)
 - Complete Shield Baiting DP Integration (Step 1N)
 - Complete Self-Debuffing Move Deferral Logic (Step 1O)
-- Full `decide_action` implementation with DP algorithm, timing optimization, lethal detection, shield baiting, and self-debuffing deferral
+- Complete Energy Stacking Logic for Self-Debuffing Moves (Step 1P)
+- Complete Shield Baiting Override for Self-Debuffing Moves (Step 1Q)
+- Complete Aegislash Form Change Logic (Step 1R)
+- Full `decide_action` implementation with DP algorithm, timing optimization, lethal detection, shield baiting, self-debuffing logic, and Aegislash form change logic
 - `decide_random_action` method (complete with lethal weight boosting)
 - `would_shield` method (basic implementation)
 - `choose_option` method (complete)
 - Battle context methods (`get_queued_actions`, `log_decision`, `get_mode`)
-- Comprehensive test coverage for all implemented components
+- Comprehensive test coverage for all implemented components (46 tests total: 27 for energy stacking/baiting override + 19 for Aegislash)
 
-❌ **Missing (~30%)**:
-- Energy stacking logic for self-debuffing moves (Step 1P)
-- Shield baiting override for self-debuffing moves (Step 1Q)
-- Aegislash form change logic (Step 1R)
-- Pokemon/Move property extensions
-- Timeline system
-- TrainingAI integration
+❌ **Missing (~20%)**:
+- Pokemon/Move property extensions (some properties still need to be added)
+- Timeline system (for battle replay and animation)
+- TrainingAI integration (for training mode battles)
 
 ## Files to Modify
 

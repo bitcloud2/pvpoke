@@ -607,6 +607,12 @@ class ActionLogic:
             if bait_override:
                 selected_move = bait_override
             
+            # STEP 1R: AEGISLASH FORM CHANGE LOGIC
+            # Check if Aegislash should build energy before changing forms
+            if ActionLogic.should_build_energy_for_aegislash(battle, poke, opponent):
+                ActionLogic._log_decision(battle, poke, " wants to gain as much energy as possible before changing form")
+                return None  # Use fast move to build energy
+            
             # Find the index of the selected move in active charged moves
             move_index = 0
             for i, move in enumerate(active_charged_moves):
@@ -651,6 +657,12 @@ class ActionLogic:
                 )
                 if bait_override:
                     selected_move = bait_override
+                
+                # STEP 1R: AEGISLASH FORM CHANGE LOGIC
+                # Check if Aegislash should build energy before changing forms
+                if ActionLogic.should_build_energy_for_aegislash(battle, poke, opponent):
+                    ActionLogic._log_decision(battle, poke, " wants to gain as much energy as possible before changing form")
+                    return None  # Use fast move to build energy
                 
                 # Find the index of the selected move in active charged moves
                 move_index = 0
@@ -2699,6 +2711,78 @@ class ActionLogic:
                 return lowest_energy_move
         
         return None
+    
+    # ========== AEGISLASH FORM CHANGE LOGIC (Step 1R) ==========
+    
+    @staticmethod
+    def should_build_energy_for_aegislash(battle, poke: Pokemon, opponent: Pokemon) -> bool:
+        """
+        Determine if Aegislash should build energy before changing forms.
+        
+        Aegislash Shield form wants to maximize energy before switching to Blade form
+        to minimize time spent in the vulnerable Blade form.
+        
+        JavaScript Reference (ActionLogic.js lines 957-966):
+        // Build energy for Aegislash Shield to reduce time spent in Blade form
+        if(poke.activeFormId == "aegislash_shield" && poke.energy < 100 - (poke.fastMove.energyGain / 2)){
+            if(battle.getMode() == "simulate" && poke.bestChargedMove.damage < opponent.hp){
+                battle.logDecision(poke, " wants to gain as much energy as possible before changing form");
+                return;
+            } else if(battle.getMode() == "emulate"){
+                battle.logDecision(poke, " wants to gain as much energy as possible before changing form");
+                return;
+            }
+        }
+        
+        Args:
+            battle: Battle instance
+            poke: Aegislash Pokemon
+            opponent: Opponent Pokemon
+            
+        Returns:
+            True if should build energy (use fast move), False if should use charged move
+        """
+        # Only apply to Aegislash Shield form
+        if not hasattr(poke, 'active_form_id') or poke.active_form_id != "aegislash_shield":
+            return False
+        
+        # Calculate energy threshold (nearly full energy)
+        # JavaScript: poke.energy < 100 - (poke.fastMove.energyGain / 2)
+        energy_threshold = 100 - (poke.fast_move.energy_gain / 2)
+        
+        # Build energy if below threshold
+        if poke.energy < energy_threshold:
+            return ActionLogic._validate_aegislash_energy_building(battle, poke, opponent)
+        
+        return False
+    
+    @staticmethod
+    def _validate_aegislash_energy_building(battle, poke: Pokemon, opponent: Pokemon) -> bool:
+        """
+        Validate Aegislash energy building based on battle mode and conditions.
+        
+        Args:
+            battle: Battle instance
+            poke: Aegislash Pokemon
+            opponent: Opponent Pokemon
+            
+        Returns:
+            True if should build energy, False if should use charged move
+        """
+        battle_mode = battle.get_mode()
+        
+        # In simulate mode, check if move won't KO opponent
+        if battle_mode == "simulate":
+            if hasattr(poke, 'best_charged_move') and poke.best_charged_move:
+                move_damage = DamageCalculator.calculate_damage(poke, opponent, poke.best_charged_move)
+                if move_damage < opponent.current_hp:
+                    return True  # Build energy since move won't KO
+        
+        # In emulate mode, always build energy for optimal play
+        elif battle_mode == "emulate":
+            return True
+        
+        return False
 
 
 # Legacy compatibility methods
