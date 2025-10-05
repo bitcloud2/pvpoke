@@ -225,12 +225,15 @@ class TestDamageCalculator(unittest.TestCase):
     
     def test_get_duel_rating(self):
         """Test duel rating calculation."""
-        # Equal HP remaining
+        # Equal HP percentage (both at full health)
+        attacker_stats = self.attacker.calculate_stats()
+        defender_stats = self.defender.calculate_stats()
+        
         rating = DamageCalculator.get_duel_rating(
             self.attacker, self.defender,
-            remaining_hp1=100, remaining_hp2=100
+            remaining_hp1=attacker_stats.hp, remaining_hp2=defender_stats.hp
         )
-        self.assertEqual(rating, 500)  # Should be even
+        self.assertEqual(rating, 500)  # Should be even when both at full HP
         
         # Attacker has more HP
         rating = DamageCalculator.get_duel_rating(
@@ -246,12 +249,12 @@ class TestDamageCalculator(unittest.TestCase):
         )
         self.assertLess(rating, 500)
         
-        # One Pokemon fainted
+        # One Pokemon fainted (attacker wins with full HP)
         rating = DamageCalculator.get_duel_rating(
             self.attacker, self.defender,
-            remaining_hp1=100, remaining_hp2=0
+            remaining_hp1=attacker_stats.hp, remaining_hp2=0
         )
-        self.assertGreater(rating, 900)  # Should be close to max
+        self.assertGreater(rating, 900)  # Should be close to max (1000)
     
     def test_get_type_effectiveness(self):
         """Test type effectiveness calculation helper."""
@@ -285,7 +288,7 @@ class TestDamageCalculator(unittest.TestCase):
         base_stats = self.attacker.calculate_stats()
         
         # High attack multiplier
-        damage = DamageCalculator.calculate_damage(
+        damage = DamageCalculator.calculate_damage_from_stats(
             attack=base_stats.atk * 2,
             defense=self.defender.calculate_stats().defense,
             power=10,
@@ -295,7 +298,7 @@ class TestDamageCalculator(unittest.TestCase):
         self.assertGreater(damage, 0)
         
         # Low defense (should increase damage)
-        damage_low_def = DamageCalculator.calculate_damage(
+        damage_low_def = DamageCalculator.calculate_damage_from_stats(
             attack=base_stats.atk,
             defense=self.defender.calculate_stats().defense * 0.5,
             power=10,
@@ -305,14 +308,14 @@ class TestDamageCalculator(unittest.TestCase):
         self.assertGreater(damage_low_def, damage / 2)
         
         # STAB bonus
-        damage_stab = DamageCalculator.calculate_damage(
+        damage_stab = DamageCalculator.calculate_damage_from_stats(
             attack=base_stats.atk,
             defense=self.defender.calculate_stats().defense,
             power=10,
             effectiveness=1.0,
             stab=1.2
         )
-        damage_no_stab = DamageCalculator.calculate_damage(
+        damage_no_stab = DamageCalculator.calculate_damage_from_stats(
             attack=base_stats.atk,
             defense=self.defender.calculate_stats().defense,
             power=10,
@@ -330,7 +333,7 @@ class TestDamageCalculator(unittest.TestCase):
         defense = 100
         power = 50
         
-        damage = DamageCalculator.calculate_damage(
+        damage = DamageCalculator.calculate_damage_from_stats(
             attack=attack,
             defense=defense,
             power=power,

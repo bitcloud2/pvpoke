@@ -1,7 +1,7 @@
 """Damage calculation logic for Pokemon GO PvP."""
 
 import math
-from typing import Optional
+from typing import Optional, Union, List
 from ..core.pokemon import Pokemon
 from ..core.moves import Move, FastMove, ChargedMove, TypeEffectiveness
 
@@ -111,7 +111,8 @@ class DamageCalculator:
     @staticmethod
     def calculate_charged_move_damage(attacker: Pokemon, defender: Pokemon,
                                      charged_move: ChargedMove,
-                                     shields_remaining: int = 0) -> int:
+                                     shields_remaining: int = 0,
+                                     shields: Optional[int] = None) -> int:
         """
         Calculate charged move damage considering shields.
         
@@ -120,18 +121,25 @@ class DamageCalculator:
             defender: Defending Pokemon
             charged_move: Charged move being used
             shields_remaining: Number of shields defender has
+            shields: Alias for shields_remaining (for backwards compatibility)
             
         Returns:
             Damage dealt (1 if shielded)
         """
-        if shields_remaining > 0:
+        # Support both parameter names
+        shields_count = shields if shields is not None else shields_remaining
+        
+        if shields_count > 0:
             return 1  # Shielded damage
         
         return DamageCalculator.calculate_damage(attacker, defender, charged_move)
     
     @staticmethod
     def get_duel_rating(attacker: Pokemon, defender: Pokemon, 
-                       attacker_hp_remaining: int, defender_hp_remaining: int) -> int:
+                       attacker_hp_remaining: Optional[int] = None,
+                       defender_hp_remaining: Optional[int] = None,
+                       remaining_hp1: Optional[int] = None,
+                       remaining_hp2: Optional[int] = None) -> int:
         """
         Calculate battle rating (0-1000 scale).
         
@@ -140,16 +148,25 @@ class DamageCalculator:
             defender: Defending Pokemon
             attacker_hp_remaining: HP remaining for attacker
             defender_hp_remaining: HP remaining for defender
+            remaining_hp1: Alias for attacker_hp_remaining
+            remaining_hp2: Alias for defender_hp_remaining
             
         Returns:
             Battle rating (500 = even, >500 = attacker wins)
         """
+        # Support both parameter naming conventions
+        hp1 = remaining_hp1 if remaining_hp1 is not None else attacker_hp_remaining
+        hp2 = remaining_hp2 if remaining_hp2 is not None else defender_hp_remaining
+        
+        if hp1 is None or hp2 is None:
+            raise ValueError("Must provide HP values for both Pokemon")
+        
         attacker_stats = attacker.calculate_stats()
         defender_stats = defender.calculate_stats()
         
         # Calculate HP percentages
-        attacker_hp_percent = attacker_hp_remaining / attacker_stats.hp
-        defender_hp_percent = defender_hp_remaining / defender_stats.hp
+        attacker_hp_percent = hp1 / attacker_stats.hp
+        defender_hp_percent = hp2 / defender_stats.hp
         
         # Calculate damage percentages (how much damage dealt)
         attacker_damage_percent = 1 - defender_hp_percent
@@ -159,3 +176,40 @@ class DamageCalculator:
         rating = 500 * (attacker_hp_percent + attacker_damage_percent)
         
         return min(1000, max(0, int(rating)))
+    
+    @staticmethod
+    def get_type_effectiveness(move_type: str, defender_types: List[str]) -> float:
+        """
+        Get type effectiveness multiplier for a move against defender types.
+        
+        Args:
+            move_type: Type of the move
+            defender_types: List of defender's types
+            
+        Returns:
+            Effectiveness multiplier
+        """
+        return TypeEffectiveness.get_effectiveness(move_type, defender_types)
+    
+    @staticmethod
+    def calculate_damage_from_stats(attack: float, defense: float, power: int,
+                                    effectiveness: float = 1.0, stab: float = 1.0) -> int:
+        """
+        Calculate damage from raw stats (for testing/analysis).
+        
+        Args:
+            attack: Attack stat
+            defense: Defense stat
+            power: Move power
+            effectiveness: Type effectiveness multiplier
+            stab: STAB multiplier
+            
+        Returns:
+            Damage dealt (minimum 1)
+        """
+        damage = math.floor(
+            0.5 * power * attack / defense * stab * effectiveness * 
+            DamageCalculator.BONUS_MULTIPLIER
+        ) + 1
+        
+        return max(1, damage)

@@ -20,6 +20,8 @@ class TeamRanker:
             cp_limit: CP limit for the league
         """
         self.cp_limit = cp_limit
+        self.teams = []
+        self.opponent_pool = []
     
     def rank_team(self, team: List[Pokemon], opponents: List[Pokemon], 
                  shield_mode: str = "average", context: str = "team-builder") -> Dict:
@@ -390,3 +392,289 @@ class TeamRanker:
             "roles": roles,
             "balance_score": min(100, len(all_types) * 10)  # Simplified balance score
         }
+    
+    def set_teams(self, teams: List[List[Pokemon]]):
+        """Set the list of teams to rank."""
+        self.teams = teams
+    
+    def set_opponent_pool(self, opponent_pool: List[Pokemon]):
+        """Set the opponent pool to rank against."""
+        self.opponent_pool = opponent_pool
+    
+    def rank_teams(self, weights: Optional[Dict[str, float]] = None) -> List[Dict]:
+        """
+        Rank all teams against the opponent pool.
+        
+        Args:
+            weights: Optional weights for opponents
+            
+        Returns:
+            List of team rankings
+        """
+        if not self.teams:
+            return []
+        
+        if not self.opponent_pool:
+            # Return empty ranking for each team if no opponents
+            return [{
+                "team": [p.species_id for p in team],
+                "score": 500,
+                "coverage": 0,
+                "weaknesses": []
+            } for team in self.teams]
+        
+        team_rankings = []
+        
+        for team in self.teams:
+            result = self.rank_team(team, self.opponent_pool)
+            
+            # Calculate team score (average of member scores)
+            team_score = sum(r["score"] for r in result["rankings"]) / len(result["rankings"]) if result["rankings"] else 500
+            
+            # Identify weaknesses
+            weaknesses = self.identify_team_weaknesses(team, self.opponent_pool)
+            
+            team_rankings.append({
+                "team": [p.species_id for p in team],
+                "score": team_score,
+                "coverage": result["coverage"],
+                "weaknesses": weaknesses,
+                "rankings": result["rankings"]  # Include detailed rankings
+            })
+        
+        # Sort by score
+        team_rankings.sort(key=lambda x: x["score"], reverse=True)
+        
+        return team_rankings
+    
+    def calculate_team_coverage(self, team: List[Pokemon], opponents: List[Pokemon]) -> float:
+        """Calculate team coverage as a percentage."""
+        # Build coverage matrix
+        coverage_matrix = {}
+        for member in team:
+            coverage_matrix[member.species_id] = {}
+            for opponent in opponents:
+                if member.species_id == opponent.species_id:
+                    continue
+                battle = Battle(member, opponent)
+                result = battle.simulate()
+                
+                member_stats = member.calculate_stats()
+                opponent_stats = opponent.calculate_stats()
+                
+                health_rating = member.current_hp / member_stats.hp
+                damage_rating = (opponent_stats.hp - opponent.current_hp) / opponent_stats.hp
+                rating = int((health_rating + damage_rating) * 500)
+                
+                coverage_matrix[member.species_id][opponent.species_id] = rating
+                
+                member.reset()
+                opponent.reset()
+        
+        coverage_result = self.calculate_coverage(coverage_matrix, opponents)
+        return coverage_result["coverage_percent"]
+    
+    def calculate_team_synergy(self, team: List[Pokemon]) -> float:
+        """Calculate team synergy as a score."""
+        result = self.analyze_team_synergy(team)
+        return result["balance_score"]
+    
+    def identify_team_weaknesses(self, team: List[Pokemon], opponents: List[Pokemon]) -> List[Dict]:
+        """Identify weaknesses in a team composition."""
+        weaknesses = []
+        
+        for opponent in opponents:
+            best_rating = 0
+            best_counter = None
+            
+            for member in team:
+                if member.species_id == opponent.species_id:
+                    continue
+                    
+                battle = Battle(member, opponent)
+                result = battle.simulate()
+                
+                member_stats = member.calculate_stats()
+                opponent_stats = opponent.calculate_stats()
+                
+                health_rating = member.current_hp / member_stats.hp
+                damage_rating = (opponent_stats.hp - opponent.current_hp) / opponent_stats.hp
+                rating = int((health_rating + damage_rating) * 500)
+                
+                if rating > best_rating:
+                    best_rating = rating
+                    best_counter = member.species_id
+                
+                member.reset()
+                opponent.reset()
+            
+            if best_rating < 500:
+                weaknesses.append({
+                    "opponent": opponent.species_id,
+                    "best_rating": best_rating,
+                    "best_counter": best_counter,
+                    "severity": 500 - best_rating
+                })
+        
+        weaknesses.sort(key=lambda x: x["severity"], reverse=True)
+        return weaknesses
+    
+    def find_best_lead(self, team: List[Pokemon], opponents: List[Pokemon]) -> Optional[Pokemon]:
+        """Find the best lead Pokemon for a team."""
+        lead_scores = []
+        
+        for member in team:
+            total_rating = 0
+            matchup_count = 0
+            
+            for opponent in opponents:
+                if member.species_id == opponent.species_id:
+                    continue
+                    
+                battle = Battle(member, opponent)
+                result = battle.simulate()
+                
+                member_stats = member.calculate_stats()
+                opponent_stats = opponent.calculate_stats()
+                
+                health_rating = member.current_hp / member_stats.hp
+                damage_rating = (opponent_stats.hp - opponent.current_hp) / opponent_stats.hp
+                rating = int((health_rating + damage_rating) * 500)
+                
+                total_rating += rating
+                matchup_count += 1
+                
+                member.reset()
+                opponent.reset()
+            
+            avg_rating = total_rating / matchup_count if matchup_count > 0 else 0
+            lead_scores.append({
+                "pokemon": member,
+                "score": avg_rating
+            })
+        
+        lead_scores.sort(key=lambda x: x["score"], reverse=True)
+        return lead_scores[0]["pokemon"] if lead_scores else None
+    
+    def calculate_team_matchup(self, team1: List[Pokemon], team2: List[Pokemon]) -> float:
+        """Calculate matchup score between two teams."""
+        total_score = 0
+        matchup_count = 0
+        
+        for member1 in team1:
+            for member2 in team2:
+                battle = Battle(member1, member2)
+                result = battle.simulate()
+                
+                member1_stats = member1.calculate_stats()
+                member2_stats = member2.calculate_stats()
+                
+                health_rating = member1.current_hp / member1_stats.hp
+                damage_rating = (member2_stats.hp - member2.current_hp) / member2_stats.hp
+                rating = int((health_rating + damage_rating) * 500)
+                
+                total_score += rating
+                matchup_count += 1
+                
+                member1.reset()
+                member2.reset()
+        
+        return total_score / matchup_count if matchup_count > 0 else 500
+    
+    def evaluate_type_balance(self, team: List[Pokemon]) -> float:
+        """Evaluate the type balance of a team as a score."""
+        type_counts = {}
+        all_types = set()
+        
+        for pokemon in team:
+            if hasattr(pokemon, 'types'):
+                for ptype in pokemon.types:
+                    if ptype:
+                        all_types.add(ptype)
+                        type_counts[ptype] = type_counts.get(ptype, 0) + 1
+        
+        # Calculate balance score
+        unique_types = len(all_types)
+        max_type_count = max(type_counts.values()) if type_counts else 0
+        
+        # Good balance = many unique types, no type appears too often
+        balance_score = (unique_types / 6) * 100  # Normalize to 100
+        if max_type_count > 2:
+            balance_score *= 0.7  # Penalty for type stacking
+        
+        return balance_score
+    
+    def evaluate_team_roles(self, team: List[Pokemon]) -> Dict:
+        """Evaluate the roles of Pokemon in a team."""
+        roles = {
+            "lead": None,
+            "safe_switch": None,
+            "closer": None
+        }
+        
+        for i, pokemon in enumerate(team):
+            # Simplified role assignment based on position
+            if i == 0:
+                roles["lead"] = pokemon
+            elif i == 1:
+                roles["safe_switch"] = pokemon
+            else:
+                roles["closer"] = pokemon
+        
+        return roles
+    
+    def suggest_improvements(self, team: List[Pokemon], opponents: List[Pokemon], 
+                           candidates: Optional[List[Pokemon]] = None) -> List[Dict]:
+        """Suggest improvements to a team composition."""
+        suggestions = []
+        
+        # If no candidates provided, use opponents as candidates
+        if candidates is None:
+            candidates = opponents
+        
+        # Identify weaknesses
+        weaknesses = self.identify_team_weaknesses(team, opponents)
+        
+        # For each weakness, find candidates that can address it
+        for weakness in weaknesses[:3]:  # Top 3 weaknesses
+            best_replacement = None
+            best_improvement = 0
+            
+            for candidate in candidates:
+                # Skip if already on team
+                if any(candidate.species_id == m.species_id for m in team):
+                    continue
+                
+                # Test candidate against the problematic opponent
+                opponent = next((o for o in opponents if o.species_id == weakness["opponent"]), None)
+                if not opponent:
+                    continue
+                
+                battle = Battle(candidate, opponent)
+                result = battle.simulate()
+                
+                candidate_stats = candidate.calculate_stats()
+                opponent_stats = opponent.calculate_stats()
+                
+                health_rating = candidate.current_hp / candidate_stats.hp
+                damage_rating = (opponent_stats.hp - opponent.current_hp) / opponent_stats.hp
+                rating = int((health_rating + damage_rating) * 500)
+                
+                improvement = rating - weakness["best_rating"]
+                
+                if improvement > best_improvement:
+                    best_improvement = improvement
+                    best_replacement = candidate
+                
+                candidate.reset()
+                opponent.reset()
+            
+            if best_replacement:
+                suggestions.append({
+                    "weakness": weakness["opponent"],
+                    "with": best_replacement.species_id,
+                    "improvement": best_improvement,
+                    "replace": weakness["best_counter"]
+                })
+        
+        return suggestions

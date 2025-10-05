@@ -227,7 +227,7 @@ class Pokemon:
         
         # Stat buff multipliers (4 stages: -4 to +4)
         buff_multipliers = [0.5, 0.5714, 0.6667, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0]
-        buff_value = self.stat_buffs[stat_index] + 4  # Convert to 0-8 index
+        buff_value = int(self.stat_buffs[stat_index]) + 4  # Convert to 0-8 index
         buff_value = max(0, min(8, buff_value))  # Clamp to valid range
         
         return base_stat * buff_multipliers[buff_value]

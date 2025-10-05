@@ -68,7 +68,7 @@ class TestBattle(unittest.TestCase):
             move_type="fighting",
             power=20,
             energy_cost=35,
-            buffs=[1.25, 1.0],
+            buffs=[1, 0],  # +1 attack stage, +0 defense stage
             buff_target="self",
             buff_chance=1.0
         )
@@ -321,7 +321,11 @@ class TestBattle(unittest.TestCase):
     def test_battle_timeout(self):
         """Test battle ends at time limit."""
         # Make both Pokemon very tanky to ensure timeout
+        # With minimum damage of 1 per turn and 480 turns max (240s / 0.5s),
+        # we need HP > 480 to ensure timeout
+        self.pokemon1.base_stats.hp = 1000
         self.pokemon1.base_stats.defense = 500
+        self.pokemon2.base_stats.hp = 1000
         self.pokemon2.base_stats.defense = 500
         self.pokemon1.reset()
         self.pokemon2.reset()
@@ -340,8 +344,8 @@ class TestBattle(unittest.TestCase):
         
         result = self.battle.simulate()
         
-        # Battle should reach time limit
-        self.assertAlmostEqual(result.time_remaining, 0, delta=10)
+        # Battle should reach time limit (or very close to it)
+        self.assertLessEqual(result.time_remaining, 1.0)
     
     def test_battle_rating_calculation(self):
         """Test battle rating is calculated correctly."""
@@ -384,14 +388,23 @@ class TestBattle(unittest.TestCase):
     
     def test_should_apply_buff_probability(self):
         """Test buff application probability."""
+        # Create a mock move for testing
+        test_move = ChargedMove(
+            move_id="TEST_MOVE",
+            name="Test Move",
+            move_type="normal",
+            power=50,
+            energy_cost=50
+        )
+        
         # Test always applies (100% chance)
-        self.assertTrue(self.battle.should_apply_buff(1.0))
+        self.assertTrue(self.battle.should_apply_buff(test_move, 1.0))
         
         # Test never applies (0% chance)
-        self.assertFalse(self.battle.should_apply_buff(0.0))
+        self.assertFalse(self.battle.should_apply_buff(test_move, 0.0))
         
         # Test probabilistic (50% chance) - just check it returns bool
-        result = self.battle.should_apply_buff(0.5)
+        result = self.battle.should_apply_buff(test_move, 0.5)
         self.assertIsInstance(result, bool)
 
 

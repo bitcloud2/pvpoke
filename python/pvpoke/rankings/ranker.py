@@ -42,6 +42,7 @@ class Ranker:
         self.targets = []  # Pokemon to rank against (can be different from pokemon_list)
         self.move_select_mode = "force"  # "auto" or "force"
         self.scenarios = self.DEFAULT_SCENARIOS.copy()
+        self.results = []  # Store ranking results
         
         # Ranking algorithm parameters
         self.rank_cutoff_increase = 0.06
@@ -58,9 +59,20 @@ class Ranker:
         """Set the list of Pokemon to rank against (meta)."""
         self.targets = targets
     
-    def set_scenarios(self, scenarios: List[RankingScenario]):
-        """Set custom ranking scenarios."""
-        self.scenarios = scenarios
+    def set_scenarios(self, scenarios: List):
+        """Set custom ranking scenarios. Can accept RankingScenario objects or dicts."""
+        converted_scenarios = []
+        for scenario in scenarios:
+            if isinstance(scenario, dict):
+                # Convert dict to RankingScenario
+                converted_scenarios.append(RankingScenario(
+                    slug=scenario.get('slug', 'custom'),
+                    shields=scenario.get('shields', [0, 0]),
+                    energy=scenario.get('energy', [0, 0])
+                ))
+            else:
+                converted_scenarios.append(scenario)
+        self.scenarios = converted_scenarios
     
     def set_iterations(self, iterations: int):
         """Set number of weighted iterations."""
@@ -130,7 +142,8 @@ class Ranker:
             
             # Battle against all targets
             for target in self.targets:
-                if pokemon.species_id == target.species_id:
+                # Skip self-matchups (compare by object identity to handle duplicates)
+                if pokemon is target or pokemon.species_id == target.species_id:
                     continue
                 
                 # Set up battle conditions
@@ -200,6 +213,9 @@ class Ranker:
         Returns:
             Updated rankings after weighted iterations
         """
+        if not rankings:
+            return rankings
+            
         for iteration in range(self.iterations):
             # Find the best score in this iteration
             best_score = max(ranking["scores"][iteration] for ranking in rankings)
@@ -297,7 +313,8 @@ class Ranker:
                         "speciesId": species_id,
                         "speciesName": ranking["speciesName"],
                         "scores": [],
-                        "scenario_scores": {}
+                        "scenario_scores": {},
+                        "all_matchups": []  # Collect all matchups across scenarios
                     }
                 
                 # Normalize score to percentage of #1 Pokemon
@@ -306,6 +323,10 @@ class Ranker:
                 
                 pokemon_scores[species_id]["scores"].append(normalized_score)
                 pokemon_scores[species_id]["scenario_scores"][scenario_name] = normalized_score
+                
+                # Collect matchups from this scenario
+                if "matches" in ranking:
+                    pokemon_scores[species_id]["all_matchups"].extend(ranking["matches"])
         
         # Calculate overall scores using geometric mean with weighting
         overall_rankings = []
@@ -340,12 +361,45 @@ class Ranker:
                         1/16
                     )
                 
+                # Calculate top matchups and counters from all matchups
+                matchups, counters = self._calculate_top_matchups_and_counters(data["all_matchups"])
+                
+                # Scale score back to 0-1000 range (from 0-100)
+                # Special case: if no matchups (empty list), keep default score of 500
+                if len(data["all_matchups"]) == 0:
+                    scaled_score = 500
+                else:
+                    scaled_score = overall_score * 10
+                
                 overall_rankings.append({
                     "speciesId": species_id,
                     "speciesName": data["speciesName"],
-                    "score": round(overall_score, 1),
+                    "score": round(scaled_score, 1),
                     "scores": scores,
-                    "scenario_scores": data["scenario_scores"]
+                    "scenario_scores": data["scenario_scores"],
+                    "matchups": matchups,
+                    "counters": counters
+                })
+            elif len(scores) > 0:
+                # Handle cases with fewer scenarios - use simple average
+                overall_score = sum(scores) / len(scores)
+                matchups, counters = self._calculate_top_matchups_and_counters(data["all_matchups"])
+                
+                # Scale score back to 0-1000 range (from 0-100)
+                # Special case: if no matchups (empty list), keep default score of 500
+                if len(data["all_matchups"]) == 0:
+                    scaled_score = 500
+                else:
+                    scaled_score = overall_score * 10
+                
+                overall_rankings.append({
+                    "speciesId": species_id,
+                    "speciesName": data["speciesName"],
+                    "score": round(scaled_score, 1),
+                    "scores": scores,
+                    "scenario_scores": data["scenario_scores"],
+                    "matchups": matchups,
+                    "counters": counters
                 })
         
         # Sort by overall score
@@ -353,7 +407,53 @@ class Ranker:
         
         return overall_rankings
     
-    def rank(self, scenarios: Optional[List[RankingScenario]] = None) -> Dict:
+    def _calculate_top_matchups_and_counters(self, all_matchups: List[Dict], limit: int = 5) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Calculate top matchups (wins) and counters (losses) from all matchups.
+        
+        Args:
+            all_matchups: List of all matchup results
+            limit: Maximum number of matchups/counters to return
+            
+        Returns:
+            Tuple of (top_matchups, top_counters)
+        """
+        # Aggregate matchups by opponent
+        opponent_ratings = {}
+        for matchup in all_matchups:
+            opponent = matchup["opponent"]
+            if opponent not in opponent_ratings:
+                opponent_ratings[opponent] = {"rating": 0, "opRating": 0, "count": 0}
+            opponent_ratings[opponent]["rating"] += matchup["rating"]
+            opponent_ratings[opponent]["opRating"] += matchup["opRating"]
+            opponent_ratings[opponent]["count"] += 1
+        
+        # Calculate average ratings
+        matchup_list = []
+        for opponent, data in opponent_ratings.items():
+            avg_rating = data["rating"] / data["count"]
+            avg_op_rating = data["opRating"] / data["count"]
+            matchup_list.append({
+                "opponent": opponent,
+                "rating": avg_rating,
+                "opRating": avg_op_rating
+            })
+        
+        # Sort by rating (descending for matchups, ascending for counters)
+        matchup_list.sort(key=lambda x: x["rating"], reverse=True)
+        
+        # Top matchups are the best wins (rating > 500)
+        wins = [m for m in matchup_list if m["rating"] > 500]
+        top_matchups = wins[:limit]
+        
+        # Counters are the worst losses (rating < 500)
+        losses = [m for m in matchup_list if m["rating"] < 500]
+        losses.sort(key=lambda x: x["rating"])  # Sort ascending for worst losses
+        top_counters = losses[:limit]
+        
+        return top_matchups, top_counters
+    
+    def rank(self, scenarios: Optional[List[RankingScenario]] = None) -> List[Dict]:
         """
         Run complete ranking calculations.
         
@@ -361,8 +461,11 @@ class Ranker:
             scenarios: Custom scenarios to use (optional)
             
         Returns:
-            Dictionary containing all ranking results
+            List of overall ranking results
         """
+        if not self.pokemon_list:
+            return []
+            
         if scenarios:
             self.set_scenarios(scenarios)
         
@@ -372,10 +475,13 @@ class Ranker:
         # Calculate overall rankings
         overall_rankings = self.calculate_overall_rankings(scenario_rankings)
         
-        return {
+        # Store results for later access
+        self.results = {
             "overall": overall_rankings,
             "scenarios": scenario_rankings
         }
+        
+        return overall_rankings
     
     def get_matchup_matrix(self, pokemon_list: List[Pokemon]) -> Dict:
         """

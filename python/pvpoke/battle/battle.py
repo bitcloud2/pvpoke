@@ -111,8 +111,8 @@ class Battle:
             if self.pokemon[0].current_hp <= 0 or self.pokemon[1].current_hp <= 0:
                 break
             
-            self.current_time += self.turn_duration
             self.current_turn += 1
+            self.current_time += self.turn_duration
         
         # Determine winner and ratings
         winner = 0 if self.pokemon[0].current_hp > 0 else 1
@@ -227,12 +227,14 @@ class Battle:
             defender.current_hp = max(0, defender.current_hp - damage)
             attacker.energy -= move.energy_cost
             
-            # Apply buffs/debuffs
-            should_buff = move.buff_chance >= 1.0 or self.should_apply_buff(move, move.buff_chance)
-            if self.debug_mode:
-                print(f"    Buff check: chance={move.buff_chance}, should_apply={should_buff}")
-            if should_buff:
-                self.apply_buffs(pokemon_index, move)
+            # Apply buffs/debuffs if move has them
+            has_buffs = hasattr(move, 'buffs') and (move.buffs[0] != 1.0 or move.buffs[1] != 1.0)
+            if has_buffs:
+                should_buff = move.buff_chance >= 1.0 or self.should_apply_buff(move, move.buff_chance)
+                if self.debug_mode:
+                    print(f"    Buff check: chance={move.buff_chance}, should_apply={should_buff}")
+                if should_buff:
+                    self.apply_buffs(pokemon_index, move)
             
             if log_timeline:
                 self.timeline.append({
@@ -252,15 +254,14 @@ class Battle:
         else:
             target = self.pokemon[1 - pokemon_index]
         
+        # Buffs array contains stage changes directly (e.g., [1, 0] means +1 attack, +0 defense)
         # Apply attack buff
-        if move.buffs[0] != 1.0:
-            stages = self.get_buff_stages(move.buffs[0])
-            target.stat_buffs[0] = max(-4, min(4, target.stat_buffs[0] + stages))
+        if move.buffs[0] != 0:
+            target.stat_buffs[0] = max(-4, min(4, target.stat_buffs[0] + move.buffs[0]))
         
         # Apply defense buff  
-        if move.buffs[1] != 1.0:
-            stages = self.get_buff_stages(move.buffs[1])
-            target.stat_buffs[1] = max(-4, min(4, target.stat_buffs[1] + stages))
+        if move.buffs[1] != 0:
+            target.stat_buffs[1] = max(-4, min(4, target.stat_buffs[1] + move.buffs[1]))
     
     def get_buff_stages(self, multiplier: float) -> int:
         """Convert buff multiplier to stages."""

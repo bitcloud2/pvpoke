@@ -39,6 +39,11 @@ class CPCalculator:
         return max(10, cp)
     
     @staticmethod
+    def get_cp_multiplier(level: float) -> float:
+        """Get CP multiplier for a level (alias for get_cpm)."""
+        return CPCalculator.get_cpm(level)
+    
+    @staticmethod
     def get_cpm(level: float) -> float:
         """Get CP multiplier for a level."""
         # CPM values for levels 1-50 (in 0.5 increments)
@@ -193,3 +198,194 @@ class CPCalculator:
             })
         
         return recommendations
+    
+    @staticmethod
+    def optimize_ivs_for_league(base_stats: Stats, cp_limit: int,
+                                level_cap: float = 50.0,
+                                min_iv: int = 0) -> Tuple[IVs, float]:
+        """
+        Find optimal IVs for a CP-limited league.
+        
+        Args:
+            base_stats: Base stats of the Pokemon
+            cp_limit: Maximum CP allowed
+            level_cap: Maximum level to consider
+            min_iv: Minimum IV value (default 0)
+            
+        Returns:
+            Tuple of (optimal_ivs, level)
+        """
+        best_ivs = None
+        best_level = 1.0
+        best_product = 0
+        
+        # Try all IV combinations within constraints
+        for atk_iv in range(min_iv, 16):
+            for def_iv in range(min_iv, 16):
+                for hp_iv in range(min_iv, 16):
+                    ivs = IVs(atk=atk_iv, defense=def_iv, hp=hp_iv)
+                    
+                    # Find maximum level under CP limit
+                    for level in [l/2 for l in range(2, int(level_cap*2)+1)]:
+                        cp = CPCalculator.calculate_cp(base_stats, ivs, level)
+                        
+                        if cp <= cp_limit:
+                            # Calculate stat product
+                            cpm = CPCalculator.get_cpm(level)
+                            atk = (base_stats.atk + ivs.atk) * cpm
+                            defense = (base_stats.defense + ivs.defense) * cpm
+                            hp = math.floor((base_stats.hp + ivs.hp) * cpm)
+                            stat_product = atk * defense * hp
+                            
+                            if stat_product > best_product:
+                                best_product = stat_product
+                                best_ivs = ivs
+                                best_level = level
+                        else:
+                            break
+        
+        return best_ivs if best_ivs else IVs(0, 0, 0), best_level
+    
+    @staticmethod
+    def calculate_stat_product(base_stats: Stats, ivs: IVs, level: float) -> float:
+        """
+        Calculate stat product for given IVs and level.
+        
+        Args:
+            base_stats: Base stats
+            ivs: Individual values
+            level: Pokemon level
+            
+        Returns:
+            Stat product (attack * defense * hp)
+        """
+        cpm = CPCalculator.get_cpm(level)
+        atk = (base_stats.atk + ivs.atk) * cpm
+        defense = (base_stats.defense + ivs.defense) * cpm
+        hp = math.floor((base_stats.hp + ivs.hp) * cpm)
+        return atk * defense * hp
+    
+    @staticmethod
+    def calculate_effective_stats(base_stats: Stats, ivs: IVs, level: float) -> Stats:
+        """
+        Calculate effective stats for given IVs and level.
+        
+        Args:
+            base_stats: Base stats
+            ivs: Individual values
+            level: Pokemon level
+            
+        Returns:
+            Stats object with effective stats
+        """
+        cpm = CPCalculator.get_cpm(level)
+        return Stats(
+            atk=(base_stats.atk + ivs.atk) * cpm,
+            defense=(base_stats.defense + ivs.defense) * cpm,
+            hp=math.floor((base_stats.hp + ivs.hp) * cpm)
+        )
+    
+    @staticmethod
+    def get_level_for_cp(base_stats: Stats, ivs: IVs, target_cp: int,
+                        max_level: float = 50.0) -> Optional[float]:
+        """
+        Find the level needed to reach a target CP (without exceeding it).
+        
+        Args:
+            base_stats: Base stats
+            ivs: Individual values
+            target_cp: Target CP to reach
+            max_level: Maximum level to check
+            
+        Returns:
+            Highest level that doesn't exceed target CP, or None if impossible
+        """
+        best_level = None
+        for level in [l/2 for l in range(2, int(max_level*2)+1)]:
+            cp = CPCalculator.calculate_cp(base_stats, ivs, level)
+            if cp <= target_cp:
+                best_level = level
+            else:
+                break
+        return best_level
+    
+    @staticmethod
+    def compare_iv_spreads(base_stats: Stats, ivs_list: List[IVs],
+                          cp_limit: int) -> List[Dict]:
+        """
+        Compare multiple IV spreads at a given CP limit.
+        
+        Args:
+            base_stats: Base stats
+            ivs_list: List of IV combinations to compare
+            cp_limit: CP limit to optimize for
+            
+        Returns:
+            List of dictionaries with comparison data, ranked by stat product
+        """
+        results = []
+        for ivs in ivs_list:
+            # Find optimal level for this IV spread at the CP limit
+            level = CPCalculator.get_level_for_cp(base_stats, ivs, cp_limit)
+            if level is None:
+                level = 1.0
+            
+            cp = CPCalculator.calculate_cp(base_stats, ivs, level)
+            stats = CPCalculator.calculate_effective_stats(base_stats, ivs, level)
+            product = CPCalculator.calculate_stat_product(base_stats, ivs, level)
+            
+            results.append({
+                'ivs': ivs,
+                'level': level,
+                'cp': cp,
+                'attack': stats.atk,
+                'defense': stats.defense,
+                'hp': stats.hp,
+                'stat_product': product
+            })
+        
+        # Sort by stat product and assign ranks
+        results.sort(key=lambda x: x['stat_product'], reverse=True)
+        for i, result in enumerate(results, 1):
+            result['rank'] = i
+        
+        return results
+    
+    @staticmethod
+    def find_breakpoints(attacker_stats: Stats, attacker_ivs: IVs,
+                        defender_stats: Stats, defender_ivs: IVs,
+                        move_power: int, level: float = 40.0) -> List[Dict]:
+        """
+        Find breakpoints for damage calculations across levels.
+        
+        Args:
+            attacker_stats: Attacker base stats
+            attacker_ivs: Attacker IVs
+            defender_stats: Defender base stats
+            defender_ivs: Defender IVs
+            move_power: Move power
+            level: Maximum level to check (default 40)
+            
+        Returns:
+            List of breakpoint dictionaries with level and damage
+        """
+        breakpoints = []
+        prev_damage = 0
+        
+        # Check each level from 1 to max level
+        for lvl in [l/2 for l in range(2, int(level*2)+1)]:
+            attacker_eff = CPCalculator.calculate_effective_stats(attacker_stats, attacker_ivs, lvl)
+            defender_eff = CPCalculator.calculate_effective_stats(defender_stats, defender_ivs, lvl)
+            
+            # Basic damage calculation (simplified, without type effectiveness)
+            damage = math.floor(move_power * (attacker_eff.atk / defender_eff.defense) * 0.5) + 1
+            
+            # Record when damage changes (breakpoint)
+            if damage != prev_damage:
+                breakpoints.append({
+                    'level': lvl,
+                    'damage': damage
+                })
+                prev_damage = damage
+        
+        return breakpoints

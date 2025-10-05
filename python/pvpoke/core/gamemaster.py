@@ -73,12 +73,13 @@ class GameMaster:
             )
             
             # Create Pokemon object
+            types = poke_data.get('types', [])
             pokemon = Pokemon(
                 species_id=poke_data['speciesId'],
                 species_name=poke_data['speciesName'],
                 dex=poke_data.get('dex', 0),
                 base_stats=base_stats,
-                types=[poke_data['types'][0], poke_data.get('types', [None, None])[1]],
+                types=[types[0] if len(types) > 0 else None, types[1] if len(types) > 1 else None],
                 fast_moves=poke_data.get('fastMoves', []),
                 charged_moves=poke_data.get('chargedMoves', []),
                 legacy_moves=poke_data.get('legacyMoves', []),
