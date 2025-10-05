@@ -208,10 +208,10 @@ The Python `decide_action` method now has **comprehensive implementation** of th
         - ✅ Port Shield form energy gain override for timeline events (Battle.js lines 1464-1466)
         - ✅ Ensure energy gain is set to 6 for Shield form fast moves
         - ✅ Add energy gain override tests (test_aegislash_energy_gain.py - 13 tests, all passing)
-    - Step 1X: Port Aegislash Shield Decision Override
-        - Port Shield form shield usage logic (Battle.js lines 1120-1122)
-        - Implement "don't shield if damage * 2 < HP" rule
-        - Add shield decision override tests
+    - ✅ Step 1X: Port Aegislash Shield Decision Override (COMPLETED)
+        - ✅ Port Shield form shield usage logic (Battle.js lines 1120-1122)
+        - ✅ Implement "don't shield if damage * 2 < HP" rule in would_shield method
+        - ✅ Add shield decision override tests (test_aegislash_shield_decision.py - 11 tests, all passing)
     - Step 1Y: Port Aegislash Move Initialization Logic
         - Port Shield form charged move self-debuffing flag (Pokemon.js lines 745-751)
         - Mark all charged moves as self-debuffing with [0,0] buffs

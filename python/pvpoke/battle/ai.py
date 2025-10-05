@@ -921,6 +921,12 @@ class ActionLogic:
         if hasattr(battle, 'get_mode') and battle.get_mode() == "simulate" and getattr(attacker, 'bait_shields', 0) == 2:
             use_shield = True
         
+        # STEP 1X: Aegislash Shield Decision Override
+        # Aegislash Shield form doesn't shield if the damage is less than half its HP
+        # JavaScript: if(defender.activeFormId == "aegislash_shield" && damage * 2 < defender.hp)
+        if getattr(defender, 'active_form_id', None) == "aegislash_shield" and damage * 2 < defender.current_hp:
+            use_shield = False
+        
         return ShieldDecision(
             value=use_shield,
             shield_weight=shield_weight,
